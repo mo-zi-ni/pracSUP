@@ -147,50 +147,51 @@ function crossBeams(at: number, windup: number): FieldCast[] {
     label: i === 0 ? '십자 — 대각선으로' : undefined,
   }));
 }
-
 // ---------------------------------------------------------------------------
 // 대난투 — 저스트가드
 //
-// 주의: 아래 타이밍은 전부 임시값이다. 실제 세르카 관문의 예고 길이와
-// 판정 창을 확인한 뒤 windup / window / 간격을 교체해야 한다.
-// 지금 상태로도 "저스트가드를 누르는 감각" 자체는 연습할 수 있지만,
-// 실전 타이밍과 일치한다고 믿으면 안 된다.
+// 가드 공격은 시각 두 개로 기술한다:
+//   at  = 보스가 노랗게 반짝이는 순간 (이때부터 가드 입력이 유효)
+//   cue = 느낌표가 뜨는 순간 (실제로 눌러야 하는 타이밍)
+// 둘 다 패턴 시작 기준 절대 시각(ms)이라 영상에서 읽은 값을 그대로 넣으면 된다.
+//
+// sequence가 같은 공격들은 하나의 보스 패턴이다. 그 안에서 헛가드를 내면
+// 남은 공격의 저스트가드가 전부 막힌다.
 // ---------------------------------------------------------------------------
 
+/** 반짝임 → 느낌표 간격의 기본값. 실제 데이터가 오면 개별 지정한다. */
+const DEFAULT_TELL = 900;
+
 /**
- * 일정 간격으로 이어지는 가드 연타를 만든다.
- * gaps는 직전 타격으로부터의 간격(ms).
+ * 느낌표 시각 목록으로 가드 연타를 만든다.
+ * tell을 주면 반짝임이 그만큼 앞서고, 안 주면 기본값을 쓴다.
  */
-function guardCombo(
-  start: number,
-  gaps: number[],
-  opts: { windup: number; window: number; label?: string },
+function guards(
+  cues: number[],
+  opts: { window: number; sequence: string; tell?: number; label?: string },
 ): GuardCast[] {
-  let at = start;
-  return gaps.map((gap, i) => {
-    at += gap;
-    return {
-      type: 'guard' as const,
-      at: at - opts.windup,
-      windup: opts.windup,
-      window: opts.window,
-      label: i === 0 ? opts.label : undefined,
-    };
-  });
+  const tell = opts.tell ?? DEFAULT_TELL;
+  return cues.map((cue, i) => ({
+    type: 'guard' as const,
+    at: cue - tell,
+    cue,
+    window: opts.window,
+    sequence: opts.sequence,
+    label: i === 0 ? opts.label : undefined,
+  }));
 }
 
 const GUARD_BASICS: Pattern = {
   id: 'guard-basics',
   name: '저스트가드 입문',
   description:
-    '노란 링이 흰 원에 닿는 순간 Shift. 초록 구간에 들어오면 성공입니다. 판정 창 200ms — 넉넉합니다.',
+    '보스가 노랗게 반짝이면 준비, 느낌표가 뜨면 G. 판정 창 ±200ms — 넉넉합니다. 헛가드하면 그 패턴은 끝까지 막을 수 없습니다.',
   arenaRadius: 12,
   casts: [
-    ...guardCombo(0, [2000, 2600, 2600, 2600], {
-      windup: 1400,
-      window: 200,
-      label: '단타 — 링이 닿는 순간',
-    }),
+    ...guards([2000], { window: 200, sequence: 'a', label: '단타 — 느낌표에 G' }),
+    ...guards([4800], { window: 200, sequence: 'b' }),
+    ...guards([7600], { window: 200, sequence: 'c' }),
+    ...guards([10400], { window: 200, sequence: 'd' }),
   ],
 };
 
@@ -198,62 +199,41 @@ const GUARD_RHYTHM: Pattern = {
   id: 'guard-rhythm',
   name: '저스트가드 — 연타 리듬',
   description:
-    '간격이 불규칙한 연타. 헛가드는 0.7초 경직이라 연타로 뭉개면 뒷타를 못 막습니다. 판정 창 130ms.',
+    '한 패턴에 여러 대가 들어옵니다. 첫 타에서 헛가드하면 나머지도 전부 못 막으니, 애매하면 차라리 안 누르는 게 낫습니다. 판정 창 ±130ms.',
   arenaRadius: 12,
   casts: [
-    ...guardCombo(0, [2200, 900, 900], {
-      windup: 1200,
+    ...guards([2200, 3100, 4000], {
       window: 130,
+      sequence: 'r1',
       label: '3연타 — 등간격',
     }),
-    ...guardCombo(5200, [1600, 700, 1300, 700], {
-      windup: 1100,
+    ...guards([6800, 8400, 9100, 10400], {
       window: 130,
+      sequence: 'r2',
+      tell: 700,
       label: '변속 4연타 — 간격을 보고',
     }),
   ],
 };
 
 /**
- * 세르카 1·2관문 대난투 연습용 골격.
+ * 세르카 1관문 대난투.
  *
- * 실제 패턴 데이터가 확보되면 casts만 갈아끼우면 된다.
- * 지금은 "장판을 피하면서 가드도 봐야 하는" 복합 상황의 구조만 잡아둔 상태다.
+ * ⚠ 아래 at/cue 값은 전부 임시다. 실제 영상에서 읽은
+ * "반짝임 시각 → 느낌표 시각"으로 교체해야 한다.
+ * 구조(연타 수, 잠금 단위)만 잡아둔 상태다.
  */
-const SERKA_BRAWL: Pattern = {
-  id: 'serka-brawl',
-  name: '세르카 대난투 (타이밍 미확정)',
+const SERKA_G1: Pattern = {
+  id: 'serka-g1',
+  name: '세르카 1관문 대난투 (타이밍 미확정)',
   description:
-    '⚠ 타이밍은 임시값입니다. 장판 회피와 저스트가드를 동시에 요구하는 구조만 구현되어 있습니다.',
-  arenaRadius: 14,
+    '⚠ 타이밍은 임시값입니다. 반짝임 → 느낌표 구조와 헛가드 잠금 규칙만 실제와 같습니다.',
+  arenaRadius: 13,
   casts: [
-    ...guardCombo(0, [2400, 1000], {
-      windup: 1300,
-      window: 150,
-      label: '돌진 2연타 — 가드',
-    }),
-    {
-      at: 4600,
-      windup: 1400,
-      shape: { kind: 'fan', radius: 14, arc: deg(110) },
-      label: '가드 직후 부채꼴 — 피하기',
-    },
-    ...guardCombo(6600, [1400, 800, 800], {
-      windup: 1200,
-      window: 150,
-      label: '3연타 — 가드',
-    }),
-    {
-      at: 10600,
-      windup: 1500,
-      shape: { kind: 'donut', inner: 6, outer: 14 },
-      label: '붙기',
-    },
-    ...guardCombo(12600, [1500, 900], {
-      windup: 1100,
-      window: 130,
-      label: '마무리 2연타',
-    }),
+    ...guards([2400, 3600], { window: 150, sequence: 's1', label: '1패턴 — 2연타' }),
+    ...guards([7000, 8100, 9200], { window: 150, sequence: 's2', label: '2패턴 — 3연타' }),
+    ...guards([13000], { window: 150, sequence: 's3', tell: 1100, label: '3패턴 — 단타' }),
+    ...guards([17000, 17900], { window: 150, sequence: 's4', tell: 800, label: '4패턴 — 빠른 2연타' }),
   ],
 };
 
@@ -263,5 +243,5 @@ export const PATTERNS: Pattern[] = [
   COMBO,
   GUARD_BASICS,
   GUARD_RHYTHM,
-  SERKA_BRAWL,
+  SERKA_G1,
 ];

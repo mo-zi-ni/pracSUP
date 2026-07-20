@@ -13,7 +13,7 @@ export interface HudState {
   maxHp: number;
   /** 대시 충전 비율 0~1 */
   dashRatio: number;
-  /** 헛가드 경직 중이면 true */
+  /** 헛가드로 현재 보스 패턴의 가드가 막혔으면 true */
   locked: boolean;
   labels: { text: string; rule: Rule | 'guard' }[];
 }
@@ -89,7 +89,7 @@ export function createHud(patterns: Pattern[]): Hud {
 
       dashFill.style.width = `${state.dashRatio * 100}%`;
       dashFill.classList.toggle('ready', state.dashRatio >= 1);
-      guardState.textContent = state.locked ? '경직' : '준비';
+      guardState.textContent = state.locked ? '잠김' : '준비';
       guardState.classList.toggle('locked', state.locked);
 
       const key = state.labels.map((l) => `${l.rule}:${l.text}`).join('|');
@@ -142,6 +142,7 @@ export function createHud(patterns: Pattern[]): Hud {
                 res.avgOffset < -15 ? ' (이름)' : res.avgOffset > 15 ? ' (늦음)' : ''
               }`;
         lines.push(`저스트가드 ${res.justGuards}/${res.guardTotal}${drift}`);
+        if (res.whiffs > 0) lines.push(`헛가드 ${res.whiffs}회 — 패턴 잠김`);
       }
       resultDetail.innerHTML = lines.join('<br>');
       result.classList.remove('hidden');

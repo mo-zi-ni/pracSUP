@@ -122,7 +122,7 @@ function step(now: number) {
     hp: Math.max(0, player.hp),
     maxHp: player.maxHp,
     dashRatio: 1 - player.cooldown / DASH_COOLDOWN,
-    locked: player.guardLockout > 0,
+    locked: encounter.guardBlocked,
     labels: encounter.activeLabels(),
   });
 

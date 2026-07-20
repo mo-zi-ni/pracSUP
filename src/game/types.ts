@@ -75,15 +75,27 @@ export interface FieldCast {
  */
 export interface GuardCast {
   type: 'guard';
-  /** 예고가 나타나는 시각(ms) */
-  at: number;
-  /** 예고부터 실제 타격까지의 시간(ms) */
-  windup: number;
   /**
-   * 저스트가드 판정 창(ms). 타격 시점 기준으로 이만큼 일찍 눌러도 성공.
-   * 좁을수록 어렵다. 40이면 프레임 단위, 150이면 넉넉한 편.
+   * 보스가 노랗게 반짝이는 시각(ms). 이때부터 가드 입력이 유효하다.
+   * 이보다 먼저 누르면 헛가드다.
+   */
+  at: number;
+  /**
+   * 느낌표가 뜨는 시각(ms) — 실제로 눌러야 하는 타이밍.
+   * 패턴 시작 기준 절대 시각이라 영상에서 읽은 값을 그대로 넣으면 된다.
+   */
+  cue: number;
+  /**
+   * cue 기준 허용 오차(ms). |누른시각 - cue| 가 이 안이면 저스트가드.
+   * 좁을수록 어렵다. 모르면 150에서 시작해 체감으로 조절한다.
    */
   window: number;
+  /**
+   * 이 공격이 속한 보스 패턴. 헛가드하면 같은 sequence의 남은 공격은
+   * 전부 저스트가드가 막힌다 — 실제 대난투 규칙.
+   * 생략하면 공격 하나가 곧 하나의 패턴이다.
+   */
+  sequence?: string;
   label?: string;
   /** 막지 못했을 때 깎이는 체력. 기본 1. */
   damage?: number;
@@ -116,6 +128,8 @@ export interface RunResult {
   /** 저스트가드 성공 횟수 / 전체 가드 공격 수 */
   justGuards: number;
   guardTotal: number;
+  /** 헛가드로 패턴이 잠긴 횟수 */
+  whiffs: number;
   /**
    * 저스트가드 성공 시 평균 입력 오차(ms). 음수는 이르다는 뜻.
    * 성공이 없으면 null. 이 값이 0에 가까울수록 타이밍이 정확하다.

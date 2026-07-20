@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Input } from '../core/input';
 import { applyFacing, createTelegraphMesh, isInside } from './shapes';
-import { GUARD_WHIFF_LOCKOUT, type Player } from './player';
+import type { Player } from './player';
 import {
   isGuard,
   type FieldCast,
@@ -9,6 +9,7 @@ import {
   type Pattern,
   type Rule,
   type RunResult,
+  type TimelineEvent,
   type Vec2,
 } from './types';
 
@@ -17,7 +18,7 @@ import {
  *
  * 두 종류의 공격을 다룬다:
  *  - 장판(FieldCast): 위치로 판정. windup이 끝나는 순간 플레이어 좌표를 본다.
- *  - 가드(GuardCast): 시간으로 판정. 타격 시점 기준 입력 시각의 오차를 본다.
+ *  - 가드(GuardCast): 시간으로 판정. 느낌표(cue) 기준 입력 시각의 오차를 본다.
  *
  * 시간은 바깥에서 주입받는다 — 슬로우모션이 dt 스케일만으로 해결되게 하려는 것.
  */
@@ -37,11 +38,10 @@ interface LiveField {
 }
 
 /**
- * telegraphing: 예고 중, 아직 타격 전
- * grace:       타격은 지났지만 "늦게 눌렀다"를 감지하기 위해 잠깐 살려둔다
- * done:        판정 끝
+ * telegraphing: 반짝임 이후, 아직 판정 전
+ * done:        판정 끝. 링이 사라지는 중
  */
-type GuardState = 'telegraphing' | 'grace' | 'done';
+type GuardState = 'telegraphing' | 'done';
 
 interface LiveGuard {
   cast: GuardCast;
@@ -51,21 +51,22 @@ interface LiveGuard {
   incomingMat: THREE.MeshBasicMaterial;
   windowMat: THREE.MeshBasicMaterial;
   /** 판정이 끝난 뒤 링이 사라지기까지 남은 시간(ms) */
-  graceLeft: number;
-  /** graceLeft의 초기값 — 페이드 비율 계산용 */
+  fadeLeft: number;
   fadeTotal: number;
 }
 
-/** 저스트가드 성공 시 링이 사라지는 시간(ms) */
-const GUARD_SUCCESS_FADE = 180;
-
+const GUARD_FADE = 200;
 const BURST_FADE = 260;
 const COLOR_DODGE = 0xff4d5e;
 const COLOR_STAND = 0x49e08a;
+const COLOR_CUE = 0xffe066;
 
-/** 가드 예고 링이 줄어드는 구간. 바깥에서 시작해 안쪽 고정 링에 닿는 순간이 타격이다. */
+/** 가드 예고 링이 줄어드는 구간. 반짝임에서 시작해 느낌표 순간에 안쪽 링에 닿는다. */
 const GUARD_RING_START = 4.6;
 const GUARD_RING_TARGET = 1.15;
+
+/** 느낌표가 화면에 남아있는 시간(ms) */
+const CUE_VISIBLE = 260;
 
 export type Feedback = {
   text: string;
@@ -76,12 +77,24 @@ export interface Encounter {
   readonly time: number;
   readonly duration: number;
   readonly finished: boolean;
+  /** 헛가드로 지금 진행 중인 보스 패턴의 가드가 막혔는가 */
+  readonly guardBlocked: boolean;
   /** 지금 화면에 떠 있는 공격들의 라벨 */
   activeLabels(): { text: string; rule: Rule | 'guard' }[];
   update(dt: number, input: Input): void;
   restart(): void;
   result(): RunResult;
   dispose(): void;
+}
+
+/** 이 공격이 완전히 끝나는 시각 */
+function endOf(event: TimelineEvent): number {
+  return isGuard(event) ? event.cue + event.window : event.at + event.windup;
+}
+
+/** 헛가드 잠금의 단위. 지정하지 않으면 공격 하나가 곧 하나의 패턴이다. */
+function sequenceOf(cast: GuardCast): string {
+  return cast.sequence ?? `solo@${cast.at}`;
 }
 
 export function createEncounter(
@@ -92,11 +105,9 @@ export function createEncounter(
   onFeedback: (feedback: Feedback) => void,
 ): Encounter {
   const boss = createBoss();
-  scene.add(boss);
+  scene.add(boss.object);
 
-  const duration =
-    pattern.duration ?? Math.max(...pattern.casts.map((c) => c.at + c.windup)) + 1500;
-
+  const duration = pattern.duration ?? Math.max(...pattern.casts.map(endOf)) + 1500;
   const guardTotal = pattern.casts.filter(isGuard).length;
 
   let fields: LiveField[] = [];
@@ -104,7 +115,10 @@ export function createEncounter(
   let time = 0;
   let hits = 0;
   let justGuards = 0;
+  let whiffs = 0;
   let offsets: number[] = [];
+  /** 헛가드로 잠긴 보스 패턴들 */
+  let lockedSequences = new Set<string>();
 
   // ---------- 장판 ----------
 
@@ -155,7 +169,6 @@ export function createEncounter(
       player.hp -= entry.cast.damage ?? 1;
       onHit();
     } else {
-      // 회피 성공은 초록으로 — 대시 타이밍이 맞았는지 즉시 보이게 한다
       entry.fill.color.set(COLOR_STAND);
     }
   }
@@ -164,20 +177,26 @@ export function createEncounter(
 
   function spawnGuard(cast: GuardCast): LiveGuard {
     const group = new THREE.Group();
+    const windup = Math.max(1, cast.cue - cast.at);
 
-    // 눌러야 하는 순간을 나타내는 고정 링
+    // 느낌표가 뜨는 순간을 나타내는 고정 링
     const target = new THREE.Mesh(
       new THREE.RingGeometry(GUARD_RING_TARGET - 0.06, GUARD_RING_TARGET + 0.06, 48),
-      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, side: THREE.DoubleSide }),
+      new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.9,
+        side: THREE.DoubleSide,
+      }),
     );
     target.rotation.x = -Math.PI / 2;
     group.add(target);
 
-    // 판정 창의 바깥 경계 — 이 링 안쪽으로 들어오면 눌러도 성공한다
+    // 판정 창 — 이 띠 안에 줄어드는 링이 들어와 있을 때 누르면 성공
     const windowRadius =
-      GUARD_RING_TARGET + (cast.window / cast.windup) * (GUARD_RING_START - GUARD_RING_TARGET);
+      GUARD_RING_TARGET + (cast.window / windup) * (GUARD_RING_START - GUARD_RING_TARGET);
     const windowMat = new THREE.MeshBasicMaterial({
-      color: 0x49e08a,
+      color: COLOR_STAND,
       transparent: true,
       opacity: 0.35,
       side: THREE.DoubleSide,
@@ -189,9 +208,8 @@ export function createEncounter(
     windowRing.rotation.x = -Math.PI / 2;
     group.add(windowRing);
 
-    // 줄어드는 링. 스케일로 반지름을 바꾼다.
     const incomingMat = new THREE.MeshBasicMaterial({
-      color: 0xffe066,
+      color: COLOR_CUE,
       transparent: true,
       opacity: 0.95,
       side: THREE.DoubleSide,
@@ -203,71 +221,75 @@ export function createEncounter(
     group.position.set(player.pos.x, 0.09, player.pos.z);
     scene.add(group);
 
-    return {
-      cast,
-      state: 'telegraphing',
-      group,
-      incoming,
-      incomingMat,
-      windowMat,
-      graceLeft: 0,
-      fadeTotal: 1,
-    };
+    return { cast, state: 'telegraphing', group, incoming, incomingMat, windowMat, fadeLeft: 0, fadeTotal: 1 };
   }
 
-  /** 타격까지 남은 시간(ms) */
-  function timeToImpact(entry: LiveGuard): number {
-    return entry.cast.at + entry.cast.windup - time;
+  /** 지금 판정 대상이 되는 가드 — 느낌표 시각이 가장 가까운 것 */
+  function nearestGuard(): LiveGuard | undefined {
+    const live = guards.filter((g) => g.state === 'telegraphing');
+    if (!live.length) return undefined;
+    return live.reduce((best, g) =>
+      Math.abs(g.cast.cue - time) < Math.abs(best.cast.cue - time) ? g : best,
+    );
+  }
+
+  function finishGuard(entry: LiveGuard, color: number) {
+    entry.state = 'done';
+    entry.fadeLeft = GUARD_FADE;
+    entry.fadeTotal = GUARD_FADE;
+    entry.incomingMat.color.set(color);
+    entry.windowMat.opacity = 0;
+  }
+
+  /**
+   * 헛가드. 실제 대난투 규칙대로 해당 보스 패턴 전체의 저스트가드를 막는다.
+   * 0.7초 경직보다 훨씬 무거운 대가라, 확신이 없으면 안 누르는 판단을 훈련시킨다.
+   */
+  function whiff(target: LiveGuard | undefined, message: string) {
+    whiffs++;
+    if (target) lockedSequences.add(sequenceOf(target.cast));
+    onFeedback({ text: message, tone: 'bad' });
   }
 
   function onGuardPress() {
-    if (player.guardLockout > 0) return;
+    const near = nearestGuard();
 
-    // 1) 판정 창 안에 들어온 공격이 있으면 저스트가드
-    const hittable = guards
-      .filter((g) => g.state === 'telegraphing' && timeToImpact(g) <= g.cast.window)
-      .sort((a, b) => timeToImpact(a) - timeToImpact(b))[0];
+    if (near && lockedSequences.has(sequenceOf(near.cast))) {
+      onFeedback({ text: '가드 불가 — 이미 헛가드', tone: 'bad' });
+      return;
+    }
 
-    if (hittable) {
-      // 이르게 누를수록 음수. 정확히 맞추면 0.
-      const offset = Math.round(-timeToImpact(hittable));
+    if (!near) {
+      whiff(undefined, '헛가드 — 대상 없음');
+      return;
+    }
+
+    // 반짝이기 전에는 가드 자체가 성립하지 않는다
+    if (time < near.cast.at) {
+      whiff(near, '너무 이름 — 반짝임 전');
+      return;
+    }
+
+    const offset = Math.round(time - near.cast.cue);
+    if (Math.abs(offset) <= near.cast.window) {
       justGuards++;
       offsets.push(offset);
-      hittable.state = 'done';
-      hittable.graceLeft = GUARD_SUCCESS_FADE;
-      hittable.fadeTotal = GUARD_SUCCESS_FADE;
-      hittable.incomingMat.color.set(COLOR_STAND);
+      finishGuard(near, COLOR_STAND);
       player.guardFlash = 220;
       onFeedback({
-        text: offset === 0 ? '저스트가드 PERFECT' : `저스트가드 ${offset}ms`,
+        text: offset === 0 ? '저스트가드 PERFECT' : `저스트가드 ${offset > 0 ? '+' : ''}${offset}ms`,
         tone: 'just',
       });
       return;
     }
 
-    // 2) 이미 맞은 직후라면 "늦었다"고 알려준다. 이건 진짜 시도였으니 경직은 없다.
-    const late = guards.find((g) => g.state === 'grace');
-    if (late) {
-      const offset = Math.round(-timeToImpact(late));
-      late.state = 'done';
-      onFeedback({ text: `늦음 +${offset}ms`, tone: 'bad' });
-      return;
-    }
-
-    // 3) 아무것도 없는데 눌렀다 — 헛가드. 경직이 없으면 연타로 다 막힌다.
-    player.guardLockout = GUARD_WHIFF_LOCKOUT;
-    onFeedback({ text: '헛가드 — 경직', tone: 'bad' });
+    // 창을 벗어난 입력. 어느 쪽으로 빗나갔는지 알려줘야 교정이 된다.
+    whiff(near, offset < 0 ? `이름 ${offset}ms` : `늦음 +${offset}ms`);
   }
 
+  /** 느낌표 시점까지 막지 못했다 */
   function resolveGuard(entry: LiveGuard) {
-    // 타격 순간까지 못 막았다 — 피해를 입고, 늦은 입력을 감지할 시간을 잠깐 준다
-    entry.state = 'grace';
-    // window가 0이면 나눗셈이 깨지므로 최소값을 둔다
-    entry.graceLeft = Math.max(1, entry.cast.window);
-    entry.fadeTotal = entry.graceLeft;
-    entry.incomingMat.color.set(COLOR_DODGE);
-    entry.windowMat.opacity = 0;
-
+    finishGuard(entry, COLOR_DODGE);
     hits++;
     player.hp -= entry.cast.damage ?? 1;
     onHit();
@@ -278,24 +300,52 @@ export function createEncounter(
     entry.group.position.set(player.pos.x, 0.09, player.pos.z);
 
     if (entry.state === 'telegraphing') {
-      const left = timeToImpact(entry);
-      if (left <= 0) {
+      const windup = Math.max(1, entry.cast.cue - entry.cast.at);
+      const toCue = entry.cast.cue - time;
+
+      // 판정 창이 완전히 지나면 실패로 확정
+      if (toCue < -entry.cast.window) {
         resolveGuard(entry);
         return;
       }
-      const progress = 1 - left / entry.cast.windup;
-      const radius =
-        GUARD_RING_START - progress * (GUARD_RING_START - GUARD_RING_TARGET);
+
+      const progress = 1 - toCue / windup;
+      const radius = Math.max(
+        0.1,
+        GUARD_RING_START - progress * (GUARD_RING_START - GUARD_RING_TARGET),
+      );
       entry.incoming.scale.setScalar(radius);
-      // 판정 창에 들어오면 링이 초록으로 — 지금 누르라는 신호
-      entry.incomingMat.color.set(left <= entry.cast.window ? COLOR_STAND : 0xffe066);
+      // 판정 창 안에 들어오면 초록 — "지금"이라는 신호
+      const inWindow = Math.abs(toCue) <= entry.cast.window;
+      entry.incomingMat.color.set(
+        lockedSequences.has(sequenceOf(entry.cast)) ? 0x6b7392 : inWindow ? COLOR_STAND : COLOR_CUE,
+      );
       return;
     }
 
-    entry.graceLeft -= dt;
+    entry.fadeLeft -= dt;
     entry.incoming.scale.setScalar(GUARD_RING_TARGET);
-    entry.incomingMat.opacity = Math.max(0, entry.graceLeft / entry.fadeTotal);
-    entry.windowMat.opacity = 0;
+    entry.incomingMat.opacity = Math.max(0, entry.fadeLeft / entry.fadeTotal);
+  }
+
+  /** 보스 연출: 반짝임(가드 가능)과 느낌표(누를 타이밍) */
+  function updateBoss(dt: number) {
+    let glow = 0;
+    let cue = false;
+
+    for (const g of guards) {
+      const c = g.cast;
+      if (time >= c.at && time <= c.cue + c.window) {
+        // 느낌표에 가까울수록 밝아진다 — 모션으로 타이밍을 읽게 하는 부분
+        const windup = Math.max(1, c.cue - c.at);
+        glow = Math.max(glow, Math.min(1, 0.35 + 0.65 * (1 - Math.abs(c.cue - time) / windup)));
+      }
+      if (time >= c.cue && time <= c.cue + CUE_VISIBLE) cue = true;
+    }
+
+    boss.setGlow(glow);
+    boss.setCue(cue);
+    boss.update(dt);
   }
 
   // ---------- 루프 ----------
@@ -308,14 +358,18 @@ export function createEncounter(
     get finished() {
       return time >= duration || player.hp <= 0;
     },
+    get guardBlocked() {
+      const near = nearestGuard();
+      return near ? lockedSequences.has(sequenceOf(near.cast)) : false;
+    },
 
     activeLabels() {
-      const fieldLabels = fields
-        .filter((e) => e.state === 'telegraphing' && e.cast.label)
-        .map((e) => ({ text: e.cast.label!, rule: (e.cast.rule ?? 'dodge') as Rule }));
       const guardLabels = guards
         .filter((g) => g.state === 'telegraphing' && g.cast.label)
         .map((g) => ({ text: g.cast.label!, rule: 'guard' as const }));
+      const fieldLabels = fields
+        .filter((e) => e.state === 'telegraphing' && e.cast.label)
+        .map((e) => ({ text: e.cast.label!, rule: (e.cast.rule ?? 'dodge') as Rule }));
       return [...guardLabels, ...fieldLabels];
     },
 
@@ -332,40 +386,32 @@ export function createEncounter(
       }
 
       // 가드 입력은 판정 갱신보다 먼저 본다.
-      // 나중에 보면 같은 프레임에 타격이 처리돼 정확히 맞춘 입력이 "늦음"이 된다.
-      if (input.pressed.has('shift')) onGuardPress();
+      // 나중에 보면 같은 프레임에 판정이 끝나 정확한 입력이 "늦음"이 된다.
+      if (input.pressed.has('g')) onGuardPress();
 
       for (const entry of guards) updateGuard(entry, dt);
 
       for (const entry of fields) {
         if (entry.state === 'telegraphing') {
           const progress = (time - entry.cast.at) / entry.cast.windup;
-          if (progress >= 1) {
-            resolveField(entry);
-          } else {
-            // 터질수록 진해진다 — 남은 시간을 색으로 읽을 수 있게
-            entry.fill.opacity = 0.18 + progress * 0.32;
-          }
+          if (progress >= 1) resolveField(entry);
+          else entry.fill.opacity = 0.18 + progress * 0.32;
         } else if (entry.fadeLeft > 0) {
           entry.fadeLeft -= dt;
           entry.fill.opacity = Math.max(0, (entry.fadeLeft / BURST_FADE) * 0.55);
         }
       }
 
+      updateBoss(dt);
+
       // 다 사라진 것들 정리
       const doneFields = fields.filter((e) => e.state === 'resolved' && e.fadeLeft <= 0);
       for (const entry of doneFields) disposeGroup(scene, entry.group);
       if (doneFields.length) fields = fields.filter((e) => !doneFields.includes(e));
 
-      const doneGuards = guards.filter((g) => g.state !== 'telegraphing' && g.graceLeft <= 0);
-      for (const entry of doneGuards) {
-        // 끝까지 아무 입력도 없었다면 그것도 정보다
-        if (entry.state === 'grace') onFeedback({ text: '무입력', tone: 'bad' });
-        disposeGroup(scene, entry.group);
-      }
+      const doneGuards = guards.filter((g) => g.state === 'done' && g.fadeLeft <= 0);
+      for (const entry of doneGuards) disposeGroup(scene, entry.group);
       if (doneGuards.length) guards = guards.filter((g) => !doneGuards.includes(g));
-
-      boss.rotation.y += dt * 0.0004;
     },
 
     restart() {
@@ -376,7 +422,11 @@ export function createEncounter(
       time = 0;
       hits = 0;
       justGuards = 0;
+      whiffs = 0;
       offsets = [];
+      lockedSequences = new Set();
+      boss.setGlow(0);
+      boss.setCue(false);
     },
 
     result(): RunResult {
@@ -387,6 +437,7 @@ export function createEncounter(
         elapsed: time,
         justGuards,
         guardTotal,
+        whiffs,
         avgOffset: offsets.length
           ? Math.round(offsets.reduce((a, b) => a + b, 0) / offsets.length)
           : null,
@@ -398,7 +449,7 @@ export function createEncounter(
       for (const entry of guards) disposeGroup(scene, entry.group);
       fields = [];
       guards = [];
-      scene.remove(boss);
+      scene.remove(boss.object);
     },
   };
 }
@@ -415,22 +466,89 @@ function disposeGroup(scene: THREE.Scene, group: THREE.Group): void {
   });
 }
 
-function createBoss(): THREE.Group {
+/**
+ * 보스. 마녀 모자를 쓴 실루엣.
+ *
+ * 저스트가드는 "보스 모션을 보고" 치는 것이므로 보스가 상태를 분명히
+ * 드러내야 한다. 그래서 반짝임(가드 가능)과 느낌표(누를 타이밍)를
+ * 보스 자신이 표현하도록 만들었다.
+ */
+interface Boss {
+  object: THREE.Group;
+  /** 노란 반짝임 세기 0~1 */
+  setGlow(amount: number): void;
+  /** 머리 위 느낌표 표시 */
+  setCue(visible: boolean): void;
+  update(dt: number): void;
+}
+
+function createBoss(): Boss {
   const group = new THREE.Group();
 
-  const body = new THREE.Mesh(
-    new THREE.CylinderGeometry(1.6, 2.2, 3.4, 8),
-    new THREE.MeshStandardMaterial({ color: 0x8b5cf6, roughness: 0.5 }),
-  );
-  body.position.y = 1.7;
-  group.add(body);
+  const robeMat = new THREE.MeshStandardMaterial({ color: 0x4a2d6b, roughness: 0.75 });
+  const robe = new THREE.Mesh(new THREE.ConeGeometry(1.9, 3.6, 12), robeMat);
+  robe.position.y = 1.8;
+  group.add(robe);
 
-  const crown = new THREE.Mesh(
-    new THREE.OctahedronGeometry(0.9),
-    new THREE.MeshStandardMaterial({ color: 0xd8b4fe, emissive: 0x4c1d95 }),
-  );
-  crown.position.y = 4.2;
-  group.add(crown);
+  const headMat = new THREE.MeshStandardMaterial({ color: 0xe8d5c0, roughness: 0.6 });
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.72, 16, 12), headMat);
+  head.position.y = 4.0;
+  group.add(head);
 
-  return group;
+  // 마녀 모자 — 챙 + 고깔
+  const hatMat = new THREE.MeshStandardMaterial({ color: 0x2b1b3d, roughness: 0.8 });
+  const brim = new THREE.Mesh(new THREE.CylinderGeometry(1.7, 1.9, 0.16, 20), hatMat);
+  brim.position.y = 4.6;
+  group.add(brim);
+
+  const cone = new THREE.Mesh(new THREE.ConeGeometry(1.0, 2.6, 16), hatMat);
+  cone.position.y = 5.9;
+  cone.rotation.z = 0.16;
+  group.add(cone);
+
+  const band = new THREE.Mesh(
+    new THREE.CylinderGeometry(1.02, 1.06, 0.3, 20),
+    new THREE.MeshStandardMaterial({ color: 0x8b5cf6 }),
+  );
+  band.position.y = 4.85;
+  group.add(band);
+
+  // 느낌표 — 눌러야 하는 순간에만 뜬다
+  const cueMat = new THREE.MeshBasicMaterial({ color: COLOR_CUE });
+  const cueGroup = new THREE.Group();
+  const bar = new THREE.Mesh(new THREE.BoxGeometry(0.42, 1.5, 0.42), cueMat);
+  bar.position.y = 0.95;
+  cueGroup.add(bar);
+  const dot = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.42, 0.42), cueMat);
+  cueGroup.add(dot);
+  cueGroup.position.y = 8.2;
+  cueGroup.visible = false;
+  group.add(cueGroup);
+
+  const glowMats = [robeMat, headMat, hatMat];
+  const baseColors = glowMats.map((m) => m.color.clone());
+  const glowTarget = new THREE.Color(COLOR_CUE);
+
+  return {
+    object: group,
+
+    setGlow(amount) {
+      const a = Math.max(0, Math.min(1, amount));
+      glowMats.forEach((m, i) => {
+        m.emissive.setRGB(a * 0.8, a * 0.65, 0);
+        // 발광만으로는 약해서 본래 색도 함께 밝힌다
+        m.color.copy(baseColors[i]).lerp(glowTarget, a * 0.45);
+      });
+    },
+
+    setCue(visible) {
+      cueGroup.visible = visible;
+    },
+
+    update() {
+      if (cueGroup.visible) {
+        cueGroup.position.y = 8.2 + Math.sin(performance.now() * 0.02) * 0.22;
+      }
+    },
+  };
 }

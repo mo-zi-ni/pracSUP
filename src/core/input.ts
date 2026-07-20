@@ -14,6 +14,8 @@ export interface Input {
   moveTarget: Vec2 | null;
   /** 커서가 가리키는 바닥 좌표 */
   cursor: Vec2;
+  /** 마우스가 한 번이라도 움직였는가. 커서 기준 대시의 기본값 판단에 쓴다. */
+  hasCursor: boolean;
   clearMoveTarget(): void;
   /** 프레임 끝에서 호출 — pressed를 비운다 */
   endFrame(): void;
@@ -32,6 +34,7 @@ export function createInput(canvas: HTMLCanvasElement, camera: THREE.Camera, pla
     pressed,
     moveTarget: null,
     cursor: { x: 0, z: 0 },
+    hasCursor: false,
     clearMoveTarget: () => {
       state.moveTarget = null;
     },
@@ -71,12 +74,16 @@ export function createInput(canvas: HTMLCanvasElement, camera: THREE.Camera, pla
   }
   function onPointerMove(ev: PointerEvent) {
     const p = toGround(ev);
-    if (p) state.cursor = p;
+    if (p) {
+      state.cursor = p;
+      state.hasCursor = true;
+    }
   }
   function onPointerDown(ev: PointerEvent) {
     const p = toGround(ev);
     if (!p) return;
     state.cursor = p;
+    state.hasCursor = true;
     // 로아와 동일하게 우클릭이 이동
     if (ev.button === 2) state.moveTarget = p;
   }
