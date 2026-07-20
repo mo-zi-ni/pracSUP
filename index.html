@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>레이드 패턴 연습장</title>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="stage"></canvas>
+
+      <header id="topbar">
+        <div class="pattern-info">
+          <h1 id="pattern-name">—</h1>
+          <p id="pattern-desc"></p>
+        </div>
+        <div class="controls">
+          <select id="pattern-select" aria-label="패턴 선택"></select>
+          <label class="speed">
+            속도
+            <input id="speed" type="range" min="25" max="100" step="5" value="100" />
+            <output id="speed-out">100%</output>
+          </label>
+          <button id="restart" type="button">다시 (R)</button>
+        </div>
+      </header>
+
+      <div id="timeline"><div id="timeline-fill"></div></div>
+
+      <div id="callout"></div>
+
+      <footer id="bottombar">
+        <div class="stat">
+          <span class="stat-label">체력</span>
+          <div id="hp"></div>
+        </div>
+        <div class="stat">
+          <span class="stat-label">대시</span>
+          <div id="dash"><div id="dash-fill"></div></div>
+        </div>
+        <p class="hint">우클릭 이동 · WASD · Space 대시(무적) · R 재시작</p>
+      </footer>
+
+      <div id="result" class="hidden">
+        <h2 id="result-title"></h2>
+        <p id="result-detail"></p>
+        <button id="result-retry" type="button">다시 시도</button>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
