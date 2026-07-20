@@ -6,7 +6,7 @@ import type { Vec2 } from '../game/types';
  * 패턴 연습에서는 WASD가 더 정밀해서 실제로 둘 다 쓰게 된다.
  */
 export interface Input {
-  /** 눌린 키 집합 (소문자) */
+  /** 눌린 키의 물리 코드 집합 (예: 'KeyG', 'Space'). IME 영향을 받지 않는다. */
   keys: Set<string>;
   /** 이번 프레임에 새로 눌린 키 — 대시처럼 1회성 입력용 */
   pressed: Set<string>;
@@ -59,14 +59,17 @@ export function createInput(canvas: HTMLCanvasElement, camera: THREE.Camera, pla
   }
 
   function onKeyDown(ev: KeyboardEvent) {
-    const k = ev.key.toLowerCase();
+    // ev.key가 아니라 ev.code를 쓴다.
+    // 한글 입력 상태에서는 G가 ev.key === 'ㅎ' 로 들어와 매칭이 깨진다.
+    // ev.code는 물리적 키라서 IME·키보드 레이아웃에 영향받지 않는다.
+    const code = ev.code;
     // 스페이스로 페이지가 스크롤되면 연습에 방해가 된다
-    if (k === ' ') ev.preventDefault();
-    if (!keys.has(k)) pressed.add(k);
-    keys.add(k);
+    if (code === 'Space') ev.preventDefault();
+    if (!keys.has(code)) pressed.add(code);
+    keys.add(code);
   }
   function onKeyUp(ev: KeyboardEvent) {
-    keys.delete(ev.key.toLowerCase());
+    keys.delete(ev.code);
   }
   /** 탭 전환 중 키가 눌린 채로 남는 것 방지 */
   function onBlur() {

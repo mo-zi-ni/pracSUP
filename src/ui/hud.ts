@@ -25,6 +25,10 @@ export interface Hud {
   flash(feedback: Feedback): void;
   /** 프레임 루프가 죽었을 때 원인을 화면에 남긴다 */
   crash(message: string): void;
+  setPaused(paused: boolean): void;
+  setCue(show: boolean): void;
+  onPause(cb: () => void): void;
+  onCueToggle(cb: (show: boolean) => void): void;
   showResult(result: RunResult): void;
   hideResult(): void;
   onSelect(cb: (id: string) => void): void;
@@ -42,6 +46,9 @@ export function createHud(patterns: Pattern[]): Hud {
   const speed = $<HTMLInputElement>('speed');
   const speedOut = $<HTMLOutputElement>('speed-out');
   const restart = $<HTMLButtonElement>('restart');
+  const pause = $<HTMLButtonElement>('pause');
+  const cue = $<HTMLInputElement>('cue');
+  const pausedOverlay = $<HTMLDivElement>('paused');
   const fill = $<HTMLDivElement>('timeline-fill');
   const callout = $<HTMLDivElement>('callout');
   const feedback = $<HTMLDivElement>('feedback');
@@ -115,6 +122,23 @@ export function createHud(patterns: Pattern[]): Hud {
       // 애니메이션이 끝나면 스스로 사라진다. reduced-motion에서도 확실히 지우려고
       // animationend가 아니라 타이머를 쓴다.
       setTimeout(() => el.remove(), 700);
+    },
+
+    setPaused(paused) {
+      pausedOverlay.classList.toggle('hidden', !paused);
+      pause.textContent = paused ? '계속 (P)' : '일시정지 (P)';
+    },
+
+    setCue(show) {
+      cue.checked = show;
+    },
+
+    onPause(cb) {
+      pause.addEventListener('click', cb);
+    },
+
+    onCueToggle(cb) {
+      cue.addEventListener('change', () => cb(cue.checked));
     },
 
     crash(message) {

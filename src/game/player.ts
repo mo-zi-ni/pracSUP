@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Input } from '../core/input';
-import { CAMERA_YAW } from '../core/view';
-import type { Vec2 } from './types';
+import { getCameraYaw } from '../core/view';
+import type { Arena, Vec2 } from './types';
 
 /**
  * 플레이어. 이동 + 대시(무적).
@@ -32,7 +32,7 @@ export interface Player {
   /** 가드 이펙트를 보여줄 남은 시간(ms) */
   guardFlash: number;
   object: THREE.Group;
-  update(dt: number, input: Input, arenaRadius: number): void;
+  update(dt: number, input: Input, arena: Arena): void;
   reset(): void;
   sync(): void;
 }
@@ -97,7 +97,7 @@ export function createPlayer(spawn: Vec2 = { x: 0, z: 12 }, maxHp = 3): Player {
     },
     object,
 
-    update(dt, input, arenaRadius) {
+    update(dt, input, arena) {
       const seconds = dt / 1000;
       this.cooldown = Math.max(0, this.cooldown - dt);
       this.guardFlash = Math.max(0, this.guardFlash - dt);
@@ -109,7 +109,7 @@ export function createPlayer(spawn: Vec2 = { x: 0, z: 12 }, maxHp = 3): Player {
         this.pos.z += this.dashDir.z * step;
         this.dashElapsed += dt;
         if (this.dashElapsed >= DASH_DURATION) this.dashElapsed = null;
-        clampToArena(this.pos, arenaRadius);
+        clampToArena(this.pos, arena);
         this.sync();
         return;
       }
@@ -133,7 +133,7 @@ export function createPlayer(spawn: Vec2 = { x: 0, z: 12 }, maxHp = 3): Player {
         this.angle = Math.atan2(dir.z, dir.x);
       }
 
-      if (input.pressed.has(' ') && this.cooldown === 0) {
+      if (input.pressed.has('Space') && this.cooldown === 0) {
         // 로아와 동일하게 마우스 커서 방향으로 돌진한다.
         // 이동 방향과 무관하므로 "옆으로 달리면서 뒤로 빼기" 같은 조작이 된다.
         this.dashDir = directionToCursor(this.pos, input) ??
@@ -143,7 +143,7 @@ export function createPlayer(spawn: Vec2 = { x: 0, z: 12 }, maxHp = 3): Player {
         this.cooldown = DASH_COOLDOWN;
       }
 
-      clampToArena(this.pos, arenaRadius);
+      clampToArena(this.pos, arena);
       this.sync();
     },
 
@@ -191,25 +191,34 @@ function readKeyboardDirection(input: Input): Vec2 | null {
   // 이걸 안 하면 W를 눌렀을 때 대각선으로 가서 조작이 어긋난 느낌이 든다.
   let sx = 0;
   let sz = 0;
-  if (input.keys.has('w')) sz -= 1;
-  if (input.keys.has('s')) sz += 1;
-  if (input.keys.has('a')) sx -= 1;
-  if (input.keys.has('d')) sx += 1;
+  if (input.keys.has('KeyW')) sz -= 1;
+  if (input.keys.has('KeyS')) sz += 1;
+  if (input.keys.has('KeyA')) sx -= 1;
+  if (input.keys.has('KeyD')) sx += 1;
   if (sx === 0 && sz === 0) return null;
 
-  const cos = Math.cos(CAMERA_YAW);
-  const sin = Math.sin(CAMERA_YAW);
+  const yaw = getCameraYaw();
+  const cos = Math.cos(yaw);
+  const sin = Math.sin(yaw);
   const x = sx * cos + sz * sin;
   const z = -sx * sin + sz * cos;
   const len = Math.hypot(x, z);
   return { x: x / len, z: z / len };
 }
 
-function clampToArena(pos: Vec2, radius: number): void {
-  const limit = radius - PLAYER_RADIUS;
-  const dist = Math.hypot(pos.x, pos.z);
-  if (dist > limit) {
-    pos.x = (pos.x / dist) * limit;
-    pos.z = (pos.z / dist) * limit;
+function clampToArena(pos: Vec2, arena: Arena): void {
+  if (arena.kind === 'circle') {
+    const limit = arena.radius - PLAYER_RADIUS;
+    const dist = Math.hypot(pos.x, pos.z);
+    if (dist > limit) {
+      pos.x = (pos.x / dist) * limit;
+      pos.z = (pos.z / dist) * limit;
+    }
+    return;
   }
+
+  // 통로는 축별로 자른다. 좌우는 파란 빛 벽, 앞뒤는 통로 양 끝.
+  const xLimit = arena.halfWidth - PLAYER_RADIUS;
+  pos.x = Math.max(-xLimit, Math.min(xLimit, pos.x));
+  pos.z = Math.max(arena.far + PLAYER_RADIUS, Math.min(arena.near - PLAYER_RADIUS, pos.z));
 }

@@ -13,6 +13,25 @@ export interface Vec2 {
   z: number;
 }
 
+/**
+ * 전투 공간의 모양.
+ *
+ * 대난투는 원형 아레나가 아니라 좌우가 파란 빛으로 막힌 좁고 긴 통로다.
+ * 보스는 통로 안쪽 끝(-Z)에, 플레이어는 바깥쪽(+Z)에 선다.
+ */
+export type Arena =
+  | { kind: 'circle'; radius: number }
+  /** x는 ±halfWidth, z는 far(보스쪽, 음수) ~ near(플레이어쪽, 양수) */
+  | { kind: 'corridor'; halfWidth: number; far: number; near: number };
+
+export function circleArena(radius: number): Arena {
+  return { kind: 'circle', radius };
+}
+
+export function corridorArena(halfWidth: number, far: number, near: number): Arena {
+  return { kind: 'corridor', halfWidth, far, near };
+}
+
 /** 장판 모양. 실제 로아 장판의 대부분이 이 4개로 표현된다. */
 export type Shape =
   /** 원형 장판 */
@@ -112,8 +131,8 @@ export interface Pattern {
   name: string;
   /** 이 패턴에서 무엇을 연습하는지 — HUD에 표시된다 */
   description?: string;
-  /** 원형 아레나 반지름 */
-  arenaRadius: number;
+  /** 전투 공간의 모양 */
+  arena: Arena;
   casts: TimelineEvent[];
   /** 명시하지 않으면 마지막 공격이 끝난 뒤 1.5초로 계산된다 */
   duration?: number;

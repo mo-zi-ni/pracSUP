@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { Arena } from '../game/types';
 
 /**
  * 쿼터뷰 고정 카메라 + 아레나 씬.
@@ -13,15 +14,26 @@ export interface View {
   renderer: THREE.WebGLRenderer;
   /** 마우스 레이캐스트용 바닥 평면 (y=0) */
   groundPlane: THREE.Plane;
-  /** 아레나를 주어진 반지름으로 다시 만들고 카메라를 맞춘다 */
-  setArena(radius: number): void;
+  /** 아레나를 다시 만들고 카메라를 맞춘다 */
+  setArena(arena: Arena): void;
   resize(): void;
   render(): void;
 }
 
-/** 로아 시점에 가까운 각도. 45도 회전 + 약 52도 내려다보기. */
-export const CAMERA_YAW = Math.PI / 4;
+/**
+ * 시점 각도. 원형 아레나는 로아처럼 45도 돌려 보고,
+ * 통로는 돌리지 않는다 — 대난투는 통로가 화면 세로로 곧게 서야 읽힌다.
+ */
+const YAW_CIRCLE = Math.PI / 4;
+const YAW_CORRIDOR = 0;
 const CAMERA_PITCH = THREE.MathUtils.degToRad(52);
+
+let cameraYaw = YAW_CIRCLE;
+
+/** WASD를 화면 기준으로 맞추려면 플레이어도 현재 시점 각도를 알아야 한다. */
+export function getCameraYaw(): number {
+  return cameraYaw;
+}
 
 export function createView(canvas: HTMLCanvasElement): View {
   const scene = new THREE.Scene();
@@ -63,18 +75,33 @@ export function createView(canvas: HTMLCanvasElement): View {
     camera.updateProjectionMatrix();
   }
 
-  function setArena(radius: number) {
+  function setArena(shape: Arena) {
     clearGroup(arena);
-    buildArena(arena, radius);
+
+    // 카메라가 담아야 하는 반경. 통로는 긴 축을 기준으로 잡는다.
+    let radius: number;
+    if (shape.kind === 'circle') {
+      buildCircleArena(arena, shape.radius);
+      radius = shape.radius;
+      cameraYaw = YAW_CIRCLE;
+    } else {
+      buildCorridorArena(arena, shape);
+      // 통로는 세로 길이를 기준으로 잡는다. 폭을 기준으로 하면 화면이 텅 빈다.
+      radius = ((shape.near - shape.far) / 2) * 0.88;
+      cameraYaw = YAW_CORRIDOR;
+    }
 
     viewSize = radius * 1.35;
     const dist = radius * 3;
     camera.position.set(
-      Math.sin(CAMERA_YAW) * Math.cos(CAMERA_PITCH) * dist,
+      Math.sin(cameraYaw) * Math.cos(CAMERA_PITCH) * dist,
       Math.sin(CAMERA_PITCH) * dist,
-      Math.cos(CAMERA_YAW) * Math.cos(CAMERA_PITCH) * dist,
+      Math.cos(cameraYaw) * Math.cos(CAMERA_PITCH) * dist,
     );
-    camera.lookAt(0, 0, 0);
+    // 통로는 가운데를 봐야 위아래가 균형 있게 잡힌다
+    const focusZ = shape.kind === 'corridor' ? (shape.far + shape.near) / 2 : 0;
+    camera.position.z += focusZ;
+    camera.lookAt(0, 0, focusZ);
     camera.far = dist * 4;
     applyCamera();
   }
@@ -98,7 +125,7 @@ export function createView(canvas: HTMLCanvasElement): View {
   };
 }
 
-function buildArena(parent: THREE.Group, radius: number): void {
+function buildCircleArena(parent: THREE.Group, radius: number): void {
   const floor = new THREE.Mesh(
     new THREE.CircleGeometry(radius, 96),
     new THREE.MeshStandardMaterial({ color: 0x1c2030, roughness: 0.95 }),
@@ -156,6 +183,73 @@ function buildArena(parent: THREE.Group, radius: number): void {
     tick.rotation.y = -angle;
     parent.add(tick);
   }
+}
+
+/**
+ * 대난투 통로. 좌우가 파란 빛 기둥으로 막힌 좁고 긴 공간.
+ * 보스가 안쪽(-Z), 플레이어가 바깥쪽(+Z)에 선다.
+ */
+function buildCorridorArena(
+  parent: THREE.Group,
+  { halfWidth, far, near }: { halfWidth: number; far: number; near: number },
+): void {
+  const length = near - far;
+  const midZ = (far + near) / 2;
+
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(halfWidth * 2, length),
+    new THREE.MeshStandardMaterial({ color: 0x171b28, roughness: 0.95 }),
+  );
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.z = midZ;
+  parent.add(floor);
+
+  // 거리 눈금 — 통로에서는 가로선이 곧 "보스와의 거리"다
+  for (let z = far + 4; z < near; z += 4) {
+    const line = new THREE.Mesh(
+      new THREE.PlaneGeometry(halfWidth * 2, 0.06),
+      new THREE.MeshBasicMaterial({ color: 0x262d42, side: THREE.DoubleSide }),
+    );
+    line.rotation.x = -Math.PI / 2;
+    line.position.set(0, 0.01, z);
+    parent.add(line);
+  }
+
+  // 좌우 파란 빛 벽. 실제로 이 선 밖으로는 못 나간다.
+  for (const side of [-1, 1]) {
+    const glow = new THREE.Mesh(
+      new THREE.PlaneGeometry(length, 3.2),
+      new THREE.MeshBasicMaterial({
+        color: 0x4d7dff,
+        transparent: true,
+        opacity: 0.42,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      }),
+    );
+    glow.rotation.y = Math.PI / 2;
+    glow.position.set(side * halfWidth, 1.4, midZ);
+    parent.add(glow);
+
+    // 바닥에 닿는 밝은 심지
+    const core = new THREE.Mesh(
+      // 폭이 X, 길이가 Z를 향하도록 — 반대로 두면 통로 밖으로 뻗어나간다
+      new THREE.PlaneGeometry(0.18, length),
+      new THREE.MeshBasicMaterial({ color: 0xa8c8ff, side: THREE.DoubleSide }),
+    );
+    core.rotation.x = -Math.PI / 2;
+    core.position.set(side * halfWidth, 0.04, midZ);
+    parent.add(core);
+  }
+
+  // 보스가 선 안쪽 끝을 어둡게 막아 통로 끝이라는 걸 보여준다
+  const backdrop = new THREE.Mesh(
+    new THREE.PlaneGeometry(halfWidth * 2, 6),
+    new THREE.MeshBasicMaterial({ color: 0x0d1020, side: THREE.DoubleSide }),
+  );
+  backdrop.position.set(0, 3, far);
+  parent.add(backdrop);
 }
 
 function clearGroup(group: THREE.Group): void {

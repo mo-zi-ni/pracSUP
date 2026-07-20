@@ -21,6 +21,11 @@
             <input id="speed" type="range" min="25" max="100" step="5" value="100" />
             <output id="speed-out">100%</output>
           </label>
+          <label class="toggle">
+            <input id="cue" type="checkbox" checked />
+            느낌표 안내
+          </label>
+          <button id="pause" type="button">일시정지 (P)</button>
           <button id="restart" type="button">다시 (R)</button>
         </div>
       </header>
@@ -43,8 +48,13 @@
           <span class="stat-label">가드</span>
           <span id="guard-state">준비</span>
         </div>
-        <p class="hint">우클릭 이동 · WASD · Space 커서 방향 대시(무적) · G 저스트가드 · R 재시작</p>
+        <p class="hint">우클릭 이동 · WASD · Space 커서 방향 대시(무적) · G 저스트가드 · P 일시정지 · R 재시작</p>
       </footer>
+
+      <div id="paused" class="hidden">
+        <h2>일시정지</h2>
+        <p>P 또는 Esc로 계속</p>
+      </div>
 
       <div id="result" class="hidden">
         <h2 id="result-title"></h2>

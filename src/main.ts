@@ -30,11 +30,14 @@ let encounter: Encounter;
 /** 슬로우모션 배율. 연습 도구의 핵심 기능이라 게임 시간에만 곱한다. */
 let timeScale = 1;
 let resultShown = false;
+let paused = false;
+/** 느낌표 안내. 끄면 보스 모션과 장판만 보고 쳐야 하는 상위 난이도가 된다. */
+let showCue = params.get('cue') !== 'off';
 
 function load(next: Pattern) {
   encounter?.dispose();
   pattern = next;
-  view.setArena(pattern.arenaRadius);
+  view.setArena(pattern.arena);
   player.reset();
   encounter = createEncounter(
     pattern,
@@ -42,11 +45,13 @@ function load(next: Pattern) {
     player,
     () => flashDamage(),
     (fb) => hud.flash(fb),
+    { showCue },
   );
   hud.setPattern(pattern);
   hud.hideResult();
   input.clearMoveTarget();
   resultShown = false;
+  setPaused(false);
 }
 
 function restart() {
@@ -55,6 +60,18 @@ function restart() {
   hud.hideResult();
   input.clearMoveTarget();
   resultShown = false;
+  setPaused(false);
+}
+
+function setPaused(next: boolean) {
+  paused = next;
+  hud.setPaused(paused);
+}
+
+function togglePause() {
+  // 이미 끝난 판을 일시정지해봐야 의미가 없다
+  if (encounter.finished) return;
+  setPaused(!paused);
 }
 
 /** 피격 시 화면을 잠깐 붉게 — 맞은 걸 놓치면 연습이 안 된다 */
@@ -73,9 +90,17 @@ hud.onRestart(restart);
 hud.onSpeed((scale) => {
   timeScale = scale;
 });
+hud.onPause(togglePause);
+hud.onCueToggle((show) => {
+  showCue = show;
+  encounter.setShowCue(show);
+});
+hud.setCue(showCue);
 
 window.addEventListener('keydown', (ev) => {
-  if (ev.key.toLowerCase() === 'r') restart();
+  // ev.code라서 한글 입력 상태에서도 동작한다
+  if (ev.code === 'KeyR') restart();
+  if (ev.code === 'KeyP' || ev.code === 'Escape') togglePause();
 });
 window.addEventListener('resize', () => view.resize());
 
@@ -108,8 +133,16 @@ function step(now: number) {
     return;
   }
 
+  if (paused) {
+    // 입력만 흘려보내고 시간은 세우지 않는다
+    input.endFrame();
+    view.render();
+    requestAnimationFrame(frame);
+    return;
+  }
+
   if (!encounter.finished) {
-    player.update(dt, input, pattern.arenaRadius);
+    player.update(dt, input, pattern.arena);
     encounter.update(dt, input);
   } else if (!resultShown) {
     hud.showResult(encounter.result());

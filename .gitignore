@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Claude Code 개인 설정 (권한 등) — 공유하지 않는다
+.claude/settings.local.json

@@ -1,4 +1,4 @@
-import type { FieldCast, GuardCast, Pattern } from './types';
+import { circleArena, corridorArena, type FieldCast, type GuardCast, type Pattern } from './types';
 
 /**
  * 패턴 라이브러리.
@@ -18,7 +18,7 @@ const BASICS: Pattern = {
   id: 'basics',
   name: '기본기 — 장판 읽기',
   description: '원형 · 부채꼴 · 직선 장판을 하나씩. 대시(Space)를 아껴 쓰지 말고 감을 잡으세요.',
-  arenaRadius: 18,
+  arena: circleArena(18),
   casts: [
     { at: 1200, windup: 1600, shape: { kind: 'circle', radius: 7 }, label: '보스 중심 원형 — 밖으로' },
     {
@@ -53,7 +53,7 @@ const SAFE_ZONE: Pattern = {
   id: 'safe-zone',
   name: '안전지대 판별',
   description: '초록 장판은 그 "안에" 있어야 삽니다. 빨강과 섞여 나오니 색을 먼저 보세요.',
-  arenaRadius: 18,
+  arena: circleArena(18),
   casts: [
     {
       at: 1000,
@@ -99,7 +99,7 @@ const COMBO: Pattern = {
   id: 'combo',
   name: '연속 패턴 — 대시 관리',
   description: '장판이 겹쳐서 들어옵니다. 대시 쿨(1.6초)을 계산하며 움직여야 합니다.',
-  arenaRadius: 18,
+  arena: circleArena(18),
   casts: [
     { at: 800, windup: 1200, shape: { kind: 'fan', radius: 18, arc: deg(120) }, label: '광역 부채꼴' },
     {
@@ -186,7 +186,7 @@ const GUARD_BASICS: Pattern = {
   name: '저스트가드 입문',
   description:
     '보스가 노랗게 반짝이면 준비, 느낌표가 뜨면 G. 판정 창 ±200ms — 넉넉합니다. 헛가드하면 그 패턴은 끝까지 막을 수 없습니다.',
-  arenaRadius: 12,
+  arena: circleArena(12),
   casts: [
     ...guards([2000], { window: 200, sequence: 'a', label: '단타 — 느낌표에 G' }),
     ...guards([4800], { window: 200, sequence: 'b' }),
@@ -200,7 +200,7 @@ const GUARD_RHYTHM: Pattern = {
   name: '저스트가드 — 연타 리듬',
   description:
     '한 패턴에 여러 대가 들어옵니다. 첫 타에서 헛가드하면 나머지도 전부 못 막으니, 애매하면 차라리 안 누르는 게 낫습니다. 판정 창 ±130ms.',
-  arenaRadius: 12,
+  arena: circleArena(12),
   casts: [
     ...guards([2200, 3100, 4000], {
       window: 130,
@@ -219,16 +219,19 @@ const GUARD_RHYTHM: Pattern = {
 /**
  * 세르카 1관문 대난투.
  *
+ * 좌우가 파란 빛으로 막힌 통로에서 1:1로 붙는 구간. 보스가 금색 파동을
+ * 터뜨리면 바닥 장판이 차오르기 시작하고, 가득 차는 순간이 저스트가드 타이밍이다.
+ *
  * ⚠ 아래 at/cue 값은 전부 임시다. 실제 영상에서 읽은
- * "반짝임 시각 → 느낌표 시각"으로 교체해야 한다.
- * 구조(연타 수, 잠금 단위)만 잡아둔 상태다.
+ * "파동 시각 → 장판이 가득 차는 시각"으로 교체해야 한다.
+ * 구조(통로, 연타 수, 잠금 단위)만 실제와 맞춰둔 상태다.
  */
 const SERKA_G1: Pattern = {
   id: 'serka-g1',
   name: '세르카 1관문 대난투 (타이밍 미확정)',
   description:
-    '⚠ 타이밍은 임시값입니다. 반짝임 → 느낌표 구조와 헛가드 잠금 규칙만 실제와 같습니다.',
-  arenaRadius: 13,
+    '⚠ 타이밍은 임시값입니다. 금색 파동 → 장판 차오름 → 가득 차는 순간 G. 헛가드하면 그 패턴은 끝까지 막을 수 없습니다.',
+  arena: corridorArena(7.5, -17, 15),
   casts: [
     ...guards([2400, 3600], { window: 150, sequence: 's1', label: '1패턴 — 2연타' }),
     ...guards([7000, 8100, 9200], { window: 150, sequence: 's2', label: '2패턴 — 3연타' }),
