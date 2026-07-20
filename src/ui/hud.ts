@@ -1,5 +1,5 @@
 import type { Feedback } from '../game/encounter';
-import type { Pattern, Rule, RunResult } from '../game/types';
+import type { Pattern, PatternMode, Rule, RunResult } from '../game/types';
 
 /**
  * HUD. 3D 위에 얹는 DOM 오버레이 — 캔버스에 텍스트를 그리는 것보다
@@ -15,6 +15,10 @@ export interface HudState {
   dashRatio: number;
   /** 헛가드로 현재 보스 패턴의 가드가 막혔으면 true */
   locked: boolean;
+  /** 방어 자세가 서 있는 동안의 남은 비율 0~1. 자세가 아니면 0. */
+  guardRatio: number;
+  /** 자세가 끝난 뒤 경직 중이면 true */
+  guardRecovering: boolean;
   labels: { text: string; rule: Rule | 'guard' }[];
 }
 
@@ -49,22 +53,65 @@ export function createHud(patterns: Pattern[]): Hud {
   const pause = $<HTMLButtonElement>('pause');
   const cue = $<HTMLInputElement>('cue');
   const pausedOverlay = $<HTMLDivElement>('paused');
+  const pausedModes = $<HTMLDivElement>('paused-modes');
   const fill = $<HTMLDivElement>('timeline-fill');
   const callout = $<HTMLDivElement>('callout');
   const feedback = $<HTMLDivElement>('feedback');
   const hp = $<HTMLDivElement>('hp');
   const dashFill = $<HTMLDivElement>('dash-fill');
   const guardState = $<HTMLSpanElement>('guard-state');
+  const guardFill = $<HTMLDivElement>('guard-fill');
   const result = $<HTMLDivElement>('result');
   const resultTitle = $<HTMLHeadingElement>('result-title');
   const resultDetail = $<HTMLParagraphElement>('result-detail');
   const resultRetry = $<HTMLButtonElement>('result-retry');
+
+  // 상단 드롭다운과 일시정지 화면의 버튼이 같은 동작을 해야 하므로
+  // 콜백을 한 곳에 모아두고 양쪽에서 호출한다.
+  let selectCallback: ((id: string) => void) | null = null;
+  select.addEventListener('change', () => selectCallback?.(select.value));
 
   for (const p of patterns) {
     const opt = document.createElement('option');
     opt.value = p.id;
     opt.textContent = p.name;
     select.append(opt);
+  }
+
+  /**
+   * 일시정지 화면의 모드 선택.
+   *
+   * 상단 드롭다운과 같은 목록이지만 모드별로 묶어서 크게 보여준다.
+   * 연습 중에 "이건 말고 저스트가드를 해보자"가 되는 순간은 대개
+   * 멈춰 세운 직후라, 그 자리에서 바로 고를 수 있어야 한다.
+   */
+  const MODE_LABEL: Record<PatternMode, string> = {
+    field: '장판 회피',
+    guard: '저스트가드 (대난투)',
+  };
+  const modeButtons = new Map<string, HTMLButtonElement>();
+
+  for (const mode of ['field', 'guard'] as PatternMode[]) {
+    const inMode = patterns.filter((p) => p.mode === mode);
+    if (!inMode.length) continue;
+
+    const group = document.createElement('div');
+    group.className = 'mode-group';
+
+    const heading = document.createElement('h3');
+    heading.textContent = MODE_LABEL[mode];
+    group.append(heading);
+
+    for (const p of inMode) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'mode-btn';
+      btn.textContent = p.name;
+      btn.addEventListener('click', () => selectCallback?.(p.id));
+      modeButtons.set(p.id, btn);
+      group.append(btn);
+    }
+    pausedModes.append(group);
   }
 
   // 매 프레임 DOM을 새로 만들지 않도록 현재 표시 중인 라벨을 기억한다
@@ -76,6 +123,9 @@ export function createHud(patterns: Pattern[]): Hud {
       name.textContent = pattern.name;
       desc.textContent = pattern.description ?? '';
       select.value = pattern.id;
+      for (const [id, btn] of modeButtons) {
+        btn.classList.toggle('current', id === pattern.id);
+      }
       shownHp = -1;
       shownLabels = '';
     },
@@ -96,8 +146,22 @@ export function createHud(patterns: Pattern[]): Hud {
 
       dashFill.style.width = `${state.dashRatio * 100}%`;
       dashFill.classList.toggle('ready', state.dashRatio >= 1);
-      guardState.textContent = state.locked ? '잠김' : '준비';
+
+      // 자세가 서 있는 0.5초를 눈으로 볼 수 있어야 "언제까지 막고 있었는지"를
+      // 배운다. 막대가 줄어드는 게 곧 남은 방어 시간이다.
+      guardFill.style.width = `${state.guardRatio * 100}%`;
+      guardFill.classList.toggle('active', state.guardRatio > 0);
+
+      const guardText = state.locked
+        ? '잠김'
+        : state.guardRatio > 0
+          ? '방어 중'
+          : state.guardRecovering
+            ? '경직'
+            : '준비';
+      guardState.textContent = guardText;
       guardState.classList.toggle('locked', state.locked);
+      guardState.classList.toggle('active', state.guardRatio > 0);
 
       const key = state.labels.map((l) => `${l.rule}:${l.text}`).join('|');
       if (key !== shownLabels) {
@@ -158,14 +222,15 @@ export function createHud(patterns: Pattern[]): Hud {
 
       const lines = [`피격 ${res.hits}회 · ${(res.elapsed / 1000).toFixed(1)}초`];
       if (res.guardTotal > 0) {
-        // 평균 오차가 한쪽으로 치우쳐 있으면 그게 교정 포인트다
-        const drift =
-          res.avgOffset === null
-            ? ''
-            : ` · 평균 ${res.avgOffset > 0 ? '+' : ''}${res.avgOffset}ms${
-                res.avgOffset < -15 ? ' (이름)' : res.avgOffset > 15 ? ' (늦음)' : ''
-              }`;
-        lines.push(`저스트가드 ${res.justGuards}/${res.guardTotal}${drift}`);
+        lines.push(
+          `저스트가드 ${res.justGuards}/${res.guardTotal} · Excellent ${res.excellents} / Great ${res.greats}`,
+        );
+        // 자세를 세운 뒤 맞기까지의 평균 시간. 크면 미리 눌러두고 기다린 것이고,
+        // 그건 실전에서 연타 2번째를 흘리는 습관으로 이어진다.
+        if (res.avgLead !== null) {
+          const early = res.avgLead > 220 ? ' — 미리 누르는 습관' : '';
+          lines.push(`평균 반응 ${res.avgLead}ms${early}`);
+        }
         if (res.whiffs > 0) lines.push(`헛가드 ${res.whiffs}회 — 패턴 잠김`);
       }
       resultDetail.innerHTML = lines.join('<br>');
@@ -177,7 +242,7 @@ export function createHud(patterns: Pattern[]): Hud {
     },
 
     onSelect(cb) {
-      select.addEventListener('change', () => cb(select.value));
+      selectCallback = cb;
     },
 
     onRestart(cb) {

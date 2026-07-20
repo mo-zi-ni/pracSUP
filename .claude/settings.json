@@ -2,7 +2,14 @@
   "permissions": {
     "allow": [
       "Skill(update-config)",
-      "Skill(update-config:*)"
+      "Skill(update-config:*)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(cp /Users/hojin/.claude.json /Users/hojin/.claude.json.bak-videovision)",
+      "Bash(node -e ' *)",
+      "mcp__video-vision__video_info",
+      "mcp__video-vision__video_watch"
     ]
   }
 }

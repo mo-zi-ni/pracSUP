@@ -2,7 +2,7 @@ import './style.css';
 import { createInput } from './core/input';
 import { createView } from './core/view';
 import { createEncounter, type Encounter } from './game/encounter';
-import { createPlayer, DASH_COOLDOWN } from './game/player';
+import { createPlayer, DASH_COOLDOWN, GUARD_STANCE } from './game/player';
 import { PATTERNS } from './game/patterns';
 import type { Pattern } from './game/types';
 import { createHud } from './ui/hud';
@@ -156,6 +156,9 @@ function step(now: number) {
     maxHp: player.maxHp,
     dashRatio: 1 - player.cooldown / DASH_COOLDOWN,
     locked: encounter.guardBlocked,
+    guardRatio:
+      player.guardElapsed === null ? 0 : 1 - player.guardElapsed / GUARD_STANCE,
+    guardRecovering: player.guardRecovery > 0,
     labels: encounter.activeLabels(),
   });
 

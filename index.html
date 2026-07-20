@@ -46,14 +46,16 @@
         </div>
         <div class="stat">
           <span class="stat-label">가드</span>
+          <div id="guard"><div id="guard-fill"></div></div>
           <span id="guard-state">준비</span>
         </div>
-        <p class="hint">우클릭 이동 · WASD · Space 커서 방향 대시(무적) · G 저스트가드 · P 일시정지 · R 재시작</p>
+        <p class="hint">우클릭 이동 · WASD · Space 커서 방향 대시(무적) · G 방어 자세(0.5초) · P 일시정지 · R 재시작</p>
       </footer>
 
       <div id="paused" class="hidden">
         <h2>일시정지</h2>
-        <p>P 또는 Esc로 계속</p>
+        <p>P 또는 Esc로 계속 · 아래에서 연습할 모드를 고를 수 있습니다</p>
+        <div id="paused-modes"></div>
       </div>
 
       <div id="result" class="hidden">

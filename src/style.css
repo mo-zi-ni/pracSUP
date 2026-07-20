@@ -204,8 +204,16 @@ select:hover {
   animation: fb-rise 0.7s ease-out forwards;
 }
 
+/* 실제 대난투처럼 판정 등급을 크게 띄운다 — 막았다는 걸 즉시 알아야
+   다음 타를 준비할 수 있다. */
 .fb.just {
-  color: #ffe066;
+  color: #fff;
+  font-size: 34px;
+  font-style: italic;
+  letter-spacing: 0.02em;
+  text-shadow:
+    0 0 18px rgba(143, 212, 255, 0.95),
+    0 2px 14px rgba(0, 0, 0, 0.9);
 }
 
 .fb.good {
@@ -299,10 +307,35 @@ select:hover {
   background: var(--safe);
 }
 
+/* 방어 자세가 남은 시간. 0.5초가 눈에 보여야 타이밍을 배운다. */
+#guard {
+  width: 120px;
+  height: 9px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+#guard-fill {
+  height: 100%;
+  width: 0;
+  background: rgba(143, 212, 255, 0.35);
+}
+
+#guard-fill.active {
+  background: #8fd4ff;
+  box-shadow: 0 0 10px rgba(143, 212, 255, 0.9);
+}
+
 #guard-state {
   font-size: 12px;
   font-weight: 600;
   color: var(--safe);
+  min-width: 42px;
+}
+
+#guard-state.active {
+  color: #8fd4ff;
 }
 
 #guard-state.locked {
@@ -358,6 +391,55 @@ select:hover {
   margin: 0;
   color: var(--muted);
   font-size: 13px;
+}
+
+/* 일시정지 중 모드 선택. 두 모드를 나란히 놓아 무엇을 고르는지가 보이게 한다. */
+#paused-modes {
+  display: flex;
+  gap: 28px;
+  margin-top: 22px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.mode-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 220px;
+}
+
+.mode-group h3 {
+  margin: 0 0 2px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.mode-btn {
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mode-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+/* 지금 하고 있는 패턴 — 멈춘 뒤 다시 찾을 때 기준점이 된다 */
+.mode-btn.current {
+  border-color: var(--accent);
+  background: rgba(99, 210, 255, 0.16);
+  color: #cdeeff;
 }
 
 #result {
