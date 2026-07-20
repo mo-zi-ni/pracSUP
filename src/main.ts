@@ -15,25 +15,34 @@ const hud = createHud(PATTERNS);
 const player = createPlayer();
 view.scene.add(player.object);
 
-let pattern: Pattern = PATTERNS[0];
-let encounter: Encounter;
-/** 슬로우모션 배율. 연습 도구의 핵심 기능이라 게임 시간에만 곱한다. */
-let timeScale = 1;
-let resultShown = false;
+const params = new URLSearchParams(location.search);
 
 /**
  * ?t=4000 을 붙이면 그 시각(ms)까지 진행한 뒤 멈춘다.
  * 패턴 타이밍을 맞출 때 특정 순간의 장판 배치를 그대로 놓고 볼 수 있다.
  */
-const requested = Number(new URLSearchParams(location.search).get('t'));
+const requested = Number(params.get('t'));
 const freezeAt = Number.isFinite(requested) && requested > 0 ? requested : null;
+
+// ?p=guard-rhythm 처럼 패턴을 바로 열 수 있다. 특정 패턴 링크를 공유할 때 쓴다.
+let pattern: Pattern = PATTERNS.find((p) => p.id === params.get('p')) ?? PATTERNS[0];
+let encounter: Encounter;
+/** 슬로우모션 배율. 연습 도구의 핵심 기능이라 게임 시간에만 곱한다. */
+let timeScale = 1;
+let resultShown = false;
 
 function load(next: Pattern) {
   encounter?.dispose();
   pattern = next;
   view.setArena(pattern.arenaRadius);
   player.reset();
-  encounter = createEncounter(pattern, view.scene, player, () => flashDamage());
+  encounter = createEncounter(
+    pattern,
+    view.scene,
+    player,
+    () => flashDamage(),
+    (fb) => hud.flash(fb),
+  );
   hud.setPattern(pattern);
   hud.hideResult();
   input.clearMoveTarget();
@@ -76,6 +85,17 @@ view.resize();
 let last = performance.now();
 
 function frame(now: number) {
+  try {
+    step(now);
+  } catch (err) {
+    // 프레임 루프가 죽으면 화면이 조용히 멈춰버려 원인을 알 수 없다.
+    // 조용한 정지보다 눈에 보이는 에러가 낫다.
+    console.error(err);
+    hud.crash(err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err));
+  }
+}
+
+function step(now: number) {
   // 탭이 백그라운드에 있다가 돌아오면 dt가 폭발하므로 잘라낸다
   const real = Math.min(now - last, 50);
   last = now;
@@ -90,7 +110,7 @@ function frame(now: number) {
 
   if (!encounter.finished) {
     player.update(dt, input, pattern.arenaRadius);
-    encounter.update(dt);
+    encounter.update(dt, input);
   } else if (!resultShown) {
     hud.showResult(encounter.result());
     resultShown = true;
@@ -102,6 +122,7 @@ function frame(now: number) {
     hp: Math.max(0, player.hp),
     maxHp: player.maxHp,
     dashRatio: 1 - player.cooldown / DASH_COOLDOWN,
+    locked: player.guardLockout > 0,
     labels: encounter.activeLabels(),
   });
 

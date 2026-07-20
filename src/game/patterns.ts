@@ -1,4 +1,4 @@
-import type { Cast, Pattern } from './types';
+import type { FieldCast, GuardCast, Pattern } from './types';
 
 /**
  * 패턴 라이브러리.
@@ -138,7 +138,7 @@ const COMBO: Pattern = {
 };
 
 /** 십자 모양으로 뻗는 4개의 직선 장판 */
-function crossBeams(at: number, windup: number): Cast[] {
+function crossBeams(at: number, windup: number): FieldCast[] {
   return [0, 3, 6, 9].map((hour, i) => ({
     at,
     windup,
@@ -148,4 +148,120 @@ function crossBeams(at: number, windup: number): Cast[] {
   }));
 }
 
-export const PATTERNS: Pattern[] = [BASICS, SAFE_ZONE, COMBO];
+// ---------------------------------------------------------------------------
+// 대난투 — 저스트가드
+//
+// 주의: 아래 타이밍은 전부 임시값이다. 실제 세르카 관문의 예고 길이와
+// 판정 창을 확인한 뒤 windup / window / 간격을 교체해야 한다.
+// 지금 상태로도 "저스트가드를 누르는 감각" 자체는 연습할 수 있지만,
+// 실전 타이밍과 일치한다고 믿으면 안 된다.
+// ---------------------------------------------------------------------------
+
+/**
+ * 일정 간격으로 이어지는 가드 연타를 만든다.
+ * gaps는 직전 타격으로부터의 간격(ms).
+ */
+function guardCombo(
+  start: number,
+  gaps: number[],
+  opts: { windup: number; window: number; label?: string },
+): GuardCast[] {
+  let at = start;
+  return gaps.map((gap, i) => {
+    at += gap;
+    return {
+      type: 'guard' as const,
+      at: at - opts.windup,
+      windup: opts.windup,
+      window: opts.window,
+      label: i === 0 ? opts.label : undefined,
+    };
+  });
+}
+
+const GUARD_BASICS: Pattern = {
+  id: 'guard-basics',
+  name: '저스트가드 입문',
+  description:
+    '노란 링이 흰 원에 닿는 순간 Shift. 초록 구간에 들어오면 성공입니다. 판정 창 200ms — 넉넉합니다.',
+  arenaRadius: 12,
+  casts: [
+    ...guardCombo(0, [2000, 2600, 2600, 2600], {
+      windup: 1400,
+      window: 200,
+      label: '단타 — 링이 닿는 순간',
+    }),
+  ],
+};
+
+const GUARD_RHYTHM: Pattern = {
+  id: 'guard-rhythm',
+  name: '저스트가드 — 연타 리듬',
+  description:
+    '간격이 불규칙한 연타. 헛가드는 0.7초 경직이라 연타로 뭉개면 뒷타를 못 막습니다. 판정 창 130ms.',
+  arenaRadius: 12,
+  casts: [
+    ...guardCombo(0, [2200, 900, 900], {
+      windup: 1200,
+      window: 130,
+      label: '3연타 — 등간격',
+    }),
+    ...guardCombo(5200, [1600, 700, 1300, 700], {
+      windup: 1100,
+      window: 130,
+      label: '변속 4연타 — 간격을 보고',
+    }),
+  ],
+};
+
+/**
+ * 세르카 1·2관문 대난투 연습용 골격.
+ *
+ * 실제 패턴 데이터가 확보되면 casts만 갈아끼우면 된다.
+ * 지금은 "장판을 피하면서 가드도 봐야 하는" 복합 상황의 구조만 잡아둔 상태다.
+ */
+const SERKA_BRAWL: Pattern = {
+  id: 'serka-brawl',
+  name: '세르카 대난투 (타이밍 미확정)',
+  description:
+    '⚠ 타이밍은 임시값입니다. 장판 회피와 저스트가드를 동시에 요구하는 구조만 구현되어 있습니다.',
+  arenaRadius: 14,
+  casts: [
+    ...guardCombo(0, [2400, 1000], {
+      windup: 1300,
+      window: 150,
+      label: '돌진 2연타 — 가드',
+    }),
+    {
+      at: 4600,
+      windup: 1400,
+      shape: { kind: 'fan', radius: 14, arc: deg(110) },
+      label: '가드 직후 부채꼴 — 피하기',
+    },
+    ...guardCombo(6600, [1400, 800, 800], {
+      windup: 1200,
+      window: 150,
+      label: '3연타 — 가드',
+    }),
+    {
+      at: 10600,
+      windup: 1500,
+      shape: { kind: 'donut', inner: 6, outer: 14 },
+      label: '붙기',
+    },
+    ...guardCombo(12600, [1500, 900], {
+      windup: 1100,
+      window: 130,
+      label: '마무리 2연타',
+    }),
+  ],
+};
+
+export const PATTERNS: Pattern[] = [
+  BASICS,
+  SAFE_ZONE,
+  COMBO,
+  GUARD_BASICS,
+  GUARD_RHYTHM,
+  SERKA_BRAWL,
+];

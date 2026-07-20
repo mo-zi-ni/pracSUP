@@ -47,7 +47,9 @@ export type Facing =
  */
 export type Rule = 'dodge' | 'stand';
 
-export interface Cast {
+/** 장판 — 위치로 피하는 공격 */
+export interface FieldCast {
+  type?: 'field';
   /** 패턴 시작 후 이 시각(ms)에 장판이 나타난다 */
   at: number;
   /** 장판이 보인 뒤 터지기까지의 시간(ms). 곧 회피 가능 시간. */
@@ -65,6 +67,34 @@ export interface Cast {
   damage?: number;
 }
 
+/**
+ * 저스트가드 — 위치가 아니라 타이밍으로 막는 공격. 대난투의 핵심.
+ *
+ * 장판과 근본적으로 다르다. 장판은 "어디에 서 있느냐"를 묻고,
+ * 이건 "언제 누르느냐"를 묻는다. 그래서 판정도 시간축에서 이뤄진다.
+ */
+export interface GuardCast {
+  type: 'guard';
+  /** 예고가 나타나는 시각(ms) */
+  at: number;
+  /** 예고부터 실제 타격까지의 시간(ms) */
+  windup: number;
+  /**
+   * 저스트가드 판정 창(ms). 타격 시점 기준으로 이만큼 일찍 눌러도 성공.
+   * 좁을수록 어렵다. 40이면 프레임 단위, 150이면 넉넉한 편.
+   */
+  window: number;
+  label?: string;
+  /** 막지 못했을 때 깎이는 체력. 기본 1. */
+  damage?: number;
+}
+
+export type TimelineEvent = FieldCast | GuardCast;
+
+export function isGuard(event: TimelineEvent): event is GuardCast {
+  return event.type === 'guard';
+}
+
 export interface Pattern {
   id: string;
   name: string;
@@ -72,8 +102,8 @@ export interface Pattern {
   description?: string;
   /** 원형 아레나 반지름 */
   arenaRadius: number;
-  casts: Cast[];
-  /** 명시하지 않으면 마지막 장판이 터진 뒤 1.5초로 계산된다 */
+  casts: TimelineEvent[];
+  /** 명시하지 않으면 마지막 공격이 끝난 뒤 1.5초로 계산된다 */
   duration?: number;
 }
 
@@ -83,4 +113,12 @@ export interface RunResult {
   hits: number;
   totalCasts: number;
   elapsed: number;
+  /** 저스트가드 성공 횟수 / 전체 가드 공격 수 */
+  justGuards: number;
+  guardTotal: number;
+  /**
+   * 저스트가드 성공 시 평균 입력 오차(ms). 음수는 이르다는 뜻.
+   * 성공이 없으면 null. 이 값이 0에 가까울수록 타이밍이 정확하다.
+   */
+  avgOffset: number | null;
 }

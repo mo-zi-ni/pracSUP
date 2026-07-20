@@ -1,3 +1,4 @@
+import type { Feedback } from '../game/encounter';
 import type { Pattern, Rule, RunResult } from '../game/types';
 
 /**
@@ -12,12 +13,18 @@ export interface HudState {
   maxHp: number;
   /** 대시 충전 비율 0~1 */
   dashRatio: number;
-  labels: { text: string; rule: Rule }[];
+  /** 헛가드 경직 중이면 true */
+  locked: boolean;
+  labels: { text: string; rule: Rule | 'guard' }[];
 }
 
 export interface Hud {
   setPattern(pattern: Pattern): void;
   update(state: HudState): void;
+  /** 저스트가드 판정처럼 순간적으로 뜨는 텍스트 */
+  flash(feedback: Feedback): void;
+  /** 프레임 루프가 죽었을 때 원인을 화면에 남긴다 */
+  crash(message: string): void;
   showResult(result: RunResult): void;
   hideResult(): void;
   onSelect(cb: (id: string) => void): void;
@@ -37,8 +44,10 @@ export function createHud(patterns: Pattern[]): Hud {
   const restart = $<HTMLButtonElement>('restart');
   const fill = $<HTMLDivElement>('timeline-fill');
   const callout = $<HTMLDivElement>('callout');
+  const feedback = $<HTMLDivElement>('feedback');
   const hp = $<HTMLDivElement>('hp');
   const dashFill = $<HTMLDivElement>('dash-fill');
+  const guardState = $<HTMLSpanElement>('guard-state');
   const result = $<HTMLDivElement>('result');
   const resultTitle = $<HTMLHeadingElement>('result-title');
   const resultDetail = $<HTMLParagraphElement>('result-detail');
@@ -80,13 +89,16 @@ export function createHud(patterns: Pattern[]): Hud {
 
       dashFill.style.width = `${state.dashRatio * 100}%`;
       dashFill.classList.toggle('ready', state.dashRatio >= 1);
+      guardState.textContent = state.locked ? '경직' : '준비';
+      guardState.classList.toggle('locked', state.locked);
 
       const key = state.labels.map((l) => `${l.rule}:${l.text}`).join('|');
       if (key !== shownLabels) {
         callout.replaceChildren(
           ...state.labels.map((l) => {
             const el = document.createElement('div');
-            el.className = l.rule === 'stand' ? 'call safe' : 'call';
+            el.className =
+              l.rule === 'guard' ? 'call guard' : l.rule === 'stand' ? 'call safe' : 'call';
             el.textContent = l.text;
             return el;
           }),
@@ -95,11 +107,43 @@ export function createHud(patterns: Pattern[]): Hud {
       }
     },
 
+    flash(fb) {
+      const el = document.createElement('div');
+      el.className = `fb ${fb.tone}`;
+      el.textContent = fb.text;
+      feedback.append(el);
+      // 애니메이션이 끝나면 스스로 사라진다. reduced-motion에서도 확실히 지우려고
+      // animationend가 아니라 타이머를 쓴다.
+      setTimeout(() => el.remove(), 700);
+    },
+
+    crash(message) {
+      let box = document.getElementById('crash');
+      if (!box) {
+        box = document.createElement('pre');
+        box.id = 'crash';
+        document.getElementById('app')?.append(box);
+      }
+      box.textContent = `프레임 루프 중단\n\n${message}`;
+    },
+
     showResult(res) {
       const perfect = res.cleared && res.hits === 0;
       resultTitle.textContent = perfect ? '무피격 클리어' : res.cleared ? '클리어' : '전멸';
       resultTitle.style.color = perfect ? '#49e08a' : res.cleared ? '#e8ecf8' : '#ff4d5e';
-      resultDetail.textContent = `피격 ${res.hits}회 · 장판 ${res.totalCasts}개 · ${(res.elapsed / 1000).toFixed(1)}초`;
+
+      const lines = [`피격 ${res.hits}회 · ${(res.elapsed / 1000).toFixed(1)}초`];
+      if (res.guardTotal > 0) {
+        // 평균 오차가 한쪽으로 치우쳐 있으면 그게 교정 포인트다
+        const drift =
+          res.avgOffset === null
+            ? ''
+            : ` · 평균 ${res.avgOffset > 0 ? '+' : ''}${res.avgOffset}ms${
+                res.avgOffset < -15 ? ' (이름)' : res.avgOffset > 15 ? ' (늦음)' : ''
+              }`;
+        lines.push(`저스트가드 ${res.justGuards}/${res.guardTotal}${drift}`);
+      }
+      resultDetail.innerHTML = lines.join('<br>');
       result.classList.remove('hidden');
     },
 

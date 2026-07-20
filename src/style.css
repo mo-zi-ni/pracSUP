@@ -175,6 +175,71 @@ select:hover {
   color: #d3f9e4;
 }
 
+.call.guard {
+  background: rgba(255, 224, 102, 0.16);
+  border-color: rgba(255, 224, 102, 0.55);
+  color: #fff3c4;
+}
+
+/* ---------- 저스트가드 타이밍 피드백 ---------- */
+
+#feedback {
+  position: absolute;
+  top: 58%;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  pointer-events: none;
+}
+
+.fb {
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.9);
+  animation: fb-rise 0.7s ease-out forwards;
+}
+
+.fb.just {
+  color: #ffe066;
+}
+
+.fb.good {
+  color: var(--safe);
+}
+
+.fb.bad {
+  color: var(--danger);
+}
+
+@keyframes fb-rise {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.9);
+  }
+  15% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-16px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fb {
+    animation: none;
+  }
+}
+
 /* ---------- 하단 ---------- */
 
 #bottombar {
@@ -234,6 +299,16 @@ select:hover {
   background: var(--safe);
 }
 
+#guard-state {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--safe);
+}
+
+#guard-state.locked {
+  color: var(--danger);
+}
+
 .hint {
   margin: 0 0 0 auto;
   font-size: 11.5px;
@@ -256,6 +331,23 @@ select:hover {
 
 #result.hidden {
   display: none;
+}
+
+#crash {
+  position: absolute;
+  left: 20px;
+  bottom: 60px;
+  max-width: 70ch;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 77, 94, 0.6);
+  border-radius: 8px;
+  background: rgba(40, 12, 18, 0.94);
+  color: #ffd7dc;
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-x: auto;
 }
 
 #result-title {
