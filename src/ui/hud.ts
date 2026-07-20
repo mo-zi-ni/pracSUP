@@ -13,8 +13,6 @@ export interface HudState {
   maxHp: number;
   /** 대시 충전 비율 0~1 */
   dashRatio: number;
-  /** 헛가드로 현재 보스 패턴의 가드가 막혔으면 true */
-  locked: boolean;
   /** 방어 자세가 서 있는 동안의 남은 비율 0~1. 자세가 아니면 0. */
   guardRatio: number;
   /** 자세가 끝난 뒤 경직 중이면 true */
@@ -152,15 +150,8 @@ export function createHud(patterns: Pattern[]): Hud {
       guardFill.style.width = `${state.guardRatio * 100}%`;
       guardFill.classList.toggle('active', state.guardRatio > 0);
 
-      const guardText = state.locked
-        ? '잠김'
-        : state.guardRatio > 0
-          ? '방어 중'
-          : state.guardRecovering
-            ? '경직'
-            : '준비';
-      guardState.textContent = guardText;
-      guardState.classList.toggle('locked', state.locked);
+      guardState.textContent =
+        state.guardRatio > 0 ? '방어 중' : state.guardRecovering ? '경직' : '준비';
       guardState.classList.toggle('active', state.guardRatio > 0);
 
       const key = state.labels.map((l) => `${l.rule}:${l.text}`).join('|');
@@ -222,16 +213,14 @@ export function createHud(patterns: Pattern[]): Hud {
 
       const lines = [`피격 ${res.hits}회 · ${(res.elapsed / 1000).toFixed(1)}초`];
       if (res.guardTotal > 0) {
-        lines.push(
-          `저스트가드 ${res.justGuards}/${res.guardTotal} · Excellent ${res.excellents} / Great ${res.greats}`,
-        );
-        // 자세를 세운 뒤 맞기까지의 평균 시간. 크면 미리 눌러두고 기다린 것이고,
-        // 그건 실전에서 연타 2번째를 흘리는 습관으로 이어진다.
+        lines.push(`저스트가드 ${res.justGuards}/${res.guardTotal} 성공`);
+        // 자세를 세운 뒤 맞기까지의 평균 시간. 등급은 아니지만, 크면 반짝임만
+        // 보고 미리 눌러두는 습관이라는 뜻이라 교정 포인트가 된다.
         if (res.avgLead !== null) {
           const early = res.avgLead > 220 ? ' — 미리 누르는 습관' : '';
           lines.push(`평균 반응 ${res.avgLead}ms${early}`);
         }
-        if (res.whiffs > 0) lines.push(`헛가드 ${res.whiffs}회 — 패턴 잠김`);
+        if (res.whiffs > 0) lines.push(`헛가드 ${res.whiffs}회`);
       }
       resultDetail.innerHTML = lines.join('<br>');
       result.classList.remove('hidden');

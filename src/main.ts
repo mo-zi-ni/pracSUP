@@ -155,7 +155,6 @@ function step(now: number) {
     hp: Math.max(0, player.hp),
     maxHp: player.maxHp,
     dashRatio: 1 - player.cooldown / DASH_COOLDOWN,
-    locked: encounter.guardBlocked,
     guardRatio:
       player.guardElapsed === null ? 0 : 1 - player.guardElapsed / GUARD_STANCE,
     guardRecovering: player.guardRecovery > 0,

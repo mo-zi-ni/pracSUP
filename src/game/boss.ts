@@ -17,6 +17,8 @@ const COLOR_CUE = 0xffe066;
 const COLOR_BLADE = 0xff2f45;
 /** 임팩트 후 무기를 거두는 시간(ms) */
 const FOLLOW_THROUGH = 420;
+/** 반짝임이 잦아드는 시간(ms). FLASH_LEAD(1초)보다 짧아야 신호가 끊겨 보인다. */
+const FLASH_TIME = 420;
 
 export interface Boss {
   object: THREE.Group;
@@ -36,7 +38,12 @@ export interface Boss {
    * 이미 다음 모션으로 덮인 뒤라면 무시된다 — 그래서 token이 필요하다.
    */
   strike(token: number): void;
-  /** 금색 발광 0~1 — 가드 가능 구간임을 알린다 */
+  /**
+   * "온다"는 신호. 날카롭게 한 번 번쩍인 뒤 잦아든다.
+   * 이 반짝임에서 1초 뒤에 모션이 시작된다.
+   */
+  flash(): void;
+  /** 금색 발광 0~1 — 예비동작의 진행도를 나타낸다 */
   setGlow(amount: number): void;
   setCue(visible: boolean): void;
   update(dt: number): void;
@@ -131,17 +138,20 @@ export function createBoss(bossZ: number): Boss {
 
   const scythe = buildScythe();
   const hammer = buildHammer();
-  const spear = buildSpear();
-  for (const w of [scythe, hammer, spear]) {
+  const wheel = buildWaterwheel();
+  const broom = buildBroom();
+  const all = [scythe, hammer, wheel, broom];
+  for (const w of all) {
     w.visible = false;
     arm.add(w);
   }
 
   const weapons: Record<GuardMotion, THREE.Group> = {
     scythe,
-    hammer,
-    thrust: spear,
-    sweep: scythe,
+    'hammer-spin': hammer,
+    'hammer-slow': hammer,
+    waterwheel: wheel,
+    broom,
   };
 
   // 느낌표
@@ -162,9 +172,37 @@ export function createBoss(bossZ: number): Boss {
   let motion: Motion | null = null;
   let projectiles: Projectile[] = [];
   let nextToken = 1;
+  /** 반짝임의 남은 시간(ms) */
+  let flashLeft = 0;
+  /** setGlow로 들어온 예비동작 밝기 — 반짝임과 합쳐서 최종 발광이 된다 */
+  let baseGlow = 0;
 
   function hideWeapons() {
-    for (const w of [scythe, hammer, spear]) w.visible = false;
+    for (const w of all) {
+      w.visible = false;
+      w.rotation.set(0, 0, 0);
+    }
+  }
+
+  /**
+   * 예비동작 밝기와 반짝임을 합쳐 재질에 반영한다.
+   * 반짝임은 예비동작 밝기를 덮어쓰지 않고 위로 얹힌다 — 그래야 모션
+   * 도중에 다음 공격이 예고돼도 두 신호가 서로를 지우지 않는다.
+   */
+  function applyGlow() {
+    const pulse = flashLeft > 0 ? flashLeft / FLASH_TIME : 0;
+    const a = baseGlow;
+    // 반짝임(pulse)만 세게 때리고 예비동작 밝기(a)는 낮게 깐다.
+    //
+    // 예전엔 예비동작이 진행될수록 보스를 밝게 물들였는데, 임팩트 직전에는
+    // 실루엣이 통째로 금색 덩어리가 되어 무기가 안 보였다. 이제 신호는
+    // 반짝임이 따로 담당하므로 예비동작 밝기는 은은한 정도면 충분하다.
+    goldMat.emissive.setRGB(a * 0.3 + pulse * 0.55, a * 0.2 + pulse * 0.4, pulse * 0.12);
+    goldMat.color.copy(goldBase).lerp(glowTarget, Math.min(1, a * 0.2 + pulse * 0.6));
+    // 로브는 거의 물들이지 않는다. 여기까지 밝히면 실루엣이 뭉개져
+    // 무기가 어디 있는지가 안 보인다.
+    darkMat.emissive.setRGB(a * 0.03 + pulse * 0.18, a * 0.02 + pulse * 0.12, 0);
+    darkMat.color.copy(darkBase);
   }
 
   /** 무기를 기본 자세로 되돌린다 */
@@ -195,47 +233,70 @@ export function createBoss(bossZ: number): Boss {
         const raise = phase(p, 0, 0.7);
         arm.rotation.z = -easeOut(raise) * 2.4;
         arm.rotation.y = easeOut(raise) * 0.8;
-        arm.position.y = 3.2 + easeOut(raise) * 1.1;
+        arm.position.y = 3.2 + easeOut(raise) * 0.7;
         // 던진 뒤에는 손이 비어 있다
         if (m.released) scythe.visible = false;
         break;
       }
 
-      // 망치를 치켜들었다가 내려찍는다. 예비동작이 길고 임팩트가 갑작스럽다.
-      case 'hammer': {
-        const raise = phase(p, 0, 0.72);
-        const slam = phase(p, 0.72, 1);
-        // 뒤로 크게 젖혔다가(-2.5) 앞으로 내려찍는다(+1.0)
-        arm.rotation.z = -easeOut(raise) * 2.5 + easeIn(slam) * 3.5;
-        arm.position.y = 3.2 + easeOut(raise) * 1.4 - easeIn(slam) * 2.2;
+      // 망치를 머리 위로 한 바퀴 빙글 돌린 뒤 곧바로 찍는다.
+      // 도는 동작이 짧게 끝나므로 느린 망치보다 훨씬 급하게 느껴진다.
+      case 'hammer-spin': {
+        const spin = phase(p, 0, 0.68);
+        const slam = phase(p, 0.68, 1);
+        arm.position.y = 3.2 + easeOut(spin) * 0.9 - easeIn(slam) * 2.0;
+        // 머리 위에서 한 바퀴 — 이 회전이 이 모션의 표식이다
+        arm.rotation.y = spin * Math.PI * 2;
+        arm.rotation.z = -easeOut(spin) * 2.3 + easeIn(slam) * 3.4;
         if (after !== null) {
-          // 찍은 자세로 잠깐 머물렀다가 천천히 든다
+          arm.rotation.y = 0;
+          arm.rotation.z = 1.1 - easeOut(after) * 1.1;
+          arm.position.y = 2.3 + easeOut(after) * 0.9;
+        }
+        break;
+      }
+
+      // 망치를 천천히 들어올렸다가 느리게 찍는다.
+      // 올리는 구간이 길고 찍는 구간도 완만해 다섯 중 가장 읽기 쉽다.
+      case 'hammer-slow': {
+        const raise = phase(p, 0, 0.78);
+        const slam = phase(p, 0.78, 1);
+        arm.rotation.z = -easeOut(raise) * 2.6 + easeOut(slam) * 3.6;
+        arm.position.y = 3.2 + easeOut(raise) * 0.9 - easeOut(slam) * 2.0;
+        if (after !== null) {
           arm.rotation.z = 1.0 - easeOut(after) * 1.0;
+          arm.position.y = 2.3 + easeOut(after) * 0.9;
+        }
+        break;
+      }
+
+      // 커다란 물레방아를 머리 위에서 빙빙 돌리다가 내려찍는다.
+      // 바퀴 자체가 계속 도는 게 핵심이라 무기를 따로 회전시킨다.
+      case 'waterwheel': {
+        const lift = phase(p, 0, 0.72);
+        const slam = phase(p, 0.72, 1);
+        arm.position.y = 3.2 + easeOut(lift) * 1.2 - easeIn(slam) * 2.4;
+        arm.rotation.z = -easeOut(lift) * 1.4 + easeIn(slam) * 2.6;
+        // 도는 속도가 붙었다가 찍는 순간 멈춘다
+        wheel.rotation.z = lift * Math.PI * 5 * (1 - slam);
+        if (after !== null) {
+          arm.rotation.z = 1.2 - easeOut(after) * 1.2;
           arm.position.y = 2.4 + easeOut(after) * 0.8;
         }
         break;
       }
 
-      // 창을 뒤로 당겼다가 내지른다. 당기는 폭이 작아 제일 빠르게 느껴진다.
-      case 'thrust': {
-        const pull = phase(p, 0, 0.6);
-        const stab = phase(p, 0.6, 1);
-        arm.rotation.x = -0.35 - easeOut(pull) * 0.5;
-        arm.position.z = easeOut(pull) * 1.2 - easeIn(stab) * 4.2;
-        if (after !== null) arm.position.z = -3.0 + easeOut(after) * 3.0;
-        break;
-      }
-
-      // 몸을 비틀었다가 통로 전체를 옆으로 훑는다
-      case 'sweep': {
-        const wind = phase(p, 0, 0.62);
-        const swing = phase(p, 0.62, 1);
-        body.rotation.y = -easeOut(wind) * 0.7 + easeIn(swing) * 1.6;
-        arm.rotation.z = -0.5 - easeOut(wind) * 0.4;
-        arm.rotation.y = -easeOut(wind) * 1.0 + easeIn(swing) * 2.2;
+      // 빗자루를 천천히 들었다가 느리게 찍는다.
+      // 망치보다 가벼워 조금 더 높이 들리지만 속도는 비슷하게 완만하다.
+      case 'broom': {
+        const raise = phase(p, 0, 0.75);
+        const slam = phase(p, 0.75, 1);
+        arm.rotation.z = -easeOut(raise) * 2.2 + easeOut(slam) * 3.2;
+        arm.rotation.x = -easeOut(raise) * 0.3;
+        arm.position.y = 3.2 + easeOut(raise) * 0.8 - easeOut(slam) * 2.0;
         if (after !== null) {
-          body.rotation.y = 0.9 * (1 - easeOut(after));
-          arm.rotation.y = 1.2 * (1 - easeOut(after));
+          arm.rotation.z = 1.0 - easeOut(after) * 1.0;
+          arm.position.y = 2.4 + easeOut(after) * 0.8;
         }
         break;
       }
@@ -286,16 +347,13 @@ export function createBoss(bossZ: number): Boss {
       if (motion && motion.token === token) motion.after = 0;
     },
 
+    flash() {
+      flashLeft = FLASH_TIME;
+    },
+
     setGlow(amount) {
-      const a = Math.max(0, Math.min(1, amount));
-      // 금색 장식만 확실히 빛나게 하고 검은 로브는 어둡게 둔다.
-      // 전체를 물들이면 실루엣이 사라져 "모션을 보고 친다"가 성립하지 않는다.
-      goldMat.emissive.setRGB(a * 0.55, a * 0.38, 0);
-      goldMat.color.copy(goldBase).lerp(glowTarget, a * 0.35);
-      // 로브는 물들이지 않는다. 여기까지 밝히면 실루엣이 뭉개져
-      // 무기가 어디 있는지가 안 보인다.
-      darkMat.emissive.setRGB(a * 0.06, a * 0.04, 0);
-      darkMat.color.copy(darkBase);
+      baseGlow = Math.max(0, Math.min(1, amount));
+      applyGlow();
     },
 
     setCue(visible) {
@@ -303,6 +361,13 @@ export function createBoss(bossZ: number): Boss {
     },
 
     update(dt) {
+      // 반짝임은 스스로 잦아든다. 이걸 빼먹으면 한 번 번쩍인 뒤 영영
+      // 최대 밝기로 남아 보스가 통째로 금색 덩어리가 된다.
+      if (flashLeft > 0) {
+        flashLeft = Math.max(0, flashLeft - dt);
+        applyGlow();
+      }
+
       // 공중에 떠 있는 느낌
       bob += dt * 0.0016;
       body.position.y = Math.sin(bob) * 0.28 + 0.9;
@@ -417,26 +482,82 @@ function buildHammer(): THREE.Group {
   return g;
 }
 
-/** 찌르기용 창 */
-function buildSpear(): THREE.Group {
+/**
+ * 물레방아. 테두리 + 살 + 물받이 판으로 만든다.
+ * 머리 위에서 도는 게 이 모션의 표식이라 실루엣이 확실히 바퀴여야 한다.
+ */
+function buildWaterwheel(): THREE.Group {
   const g = new THREE.Group();
+  const woodMat = new THREE.MeshStandardMaterial({ color: 0x4a3a2a, roughness: 0.75 });
+  const trimMat = new THREE.MeshStandardMaterial({
+    color: 0xd9a441,
+    roughness: 0.35,
+    metalness: 0.6,
+  });
 
-  const tip = new THREE.Mesh(
-    new THREE.ConeGeometry(0.22, 1.1, 10),
-    new THREE.MeshBasicMaterial({ color: COLOR_BLADE }),
-  );
-  tip.position.y = 2.9;
-  g.add(tip);
+  const R = 1.9;
+
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(R, 0.16, 8, 28), trimMat);
+  rim.position.y = 2.4;
+  g.add(rim);
+
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.34, 12), trimMat);
+  hub.rotation.x = Math.PI / 2;
+  hub.position.y = 2.4;
+  g.add(hub);
+
+  // 살 8개와 그 끝의 물받이 판
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+
+    const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.12, R * 2, 0.12), woodMat);
+    spoke.position.y = 2.4;
+    spoke.rotation.z = a;
+    g.add(spoke);
+
+    const paddle = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.12, 0.5), woodMat);
+    paddle.position.set(Math.cos(a) * R, 2.4 + Math.sin(a) * R, 0);
+    paddle.rotation.z = a;
+    g.add(paddle);
+  }
 
   const shaft = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.08, 0.08, 4.0, 8),
+    new THREE.CylinderGeometry(0.11, 0.11, 2.2, 8),
     new THREE.MeshStandardMaterial({ color: 0x241a2e, roughness: 0.6 }),
   );
-  shaft.position.y = 1.2;
+  shaft.position.y = 0.9;
   g.add(shaft);
 
-  // 창은 앞으로 눕혀 든다
-  g.rotation.x = Math.PI / 2.2;
+  return g;
+}
+
+/** 마녀의 빗자루 */
+function buildBroom(): THREE.Group {
+  const g = new THREE.Group();
+
+  const shaft = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.09, 0.09, 3.6, 8),
+    new THREE.MeshStandardMaterial({ color: 0x5a4028, roughness: 0.7 }),
+  );
+  shaft.position.y = 1.5;
+  g.add(shaft);
+
+  // 솔 — 위로 갈수록 퍼지는 짚단.
+  // 옆에서 봐도 부피가 있어야 빗자루로 읽히므로 원뿔대를 쓴다.
+  const bristles = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.66, 0.26, 1.5, 12),
+    new THREE.MeshStandardMaterial({ color: 0xc79a4e, roughness: 0.9 }),
+  );
+  bristles.position.y = 3.7;
+  g.add(bristles);
+
+  const tie = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.2, 0.2, 0.24, 10),
+    new THREE.MeshStandardMaterial({ color: 0x8c5a2b, roughness: 0.6 }),
+  );
+  tie.position.y = 3.05;
+  g.add(tie);
+
   return g;
 }
 

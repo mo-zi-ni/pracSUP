@@ -4,6 +4,7 @@ import { createBoss } from './boss';
 import { applyFacing, createTelegraphMesh, isInside } from './shapes';
 import { GUARD_STANCE, type Player } from './player';
 import {
+  FLASH_LEAD,
   isGuard,
   type Arena,
   type FieldCast,
@@ -27,8 +28,9 @@ import {
  * 공격이 닿는 순간(impact) 그 자세가 살아 있으면 막힌다. 그래서 여기서는
  * "누른 시각과 목표 시각의 오차"를 재지 않는다. impact 시점의 상태만 본다.
  *
- * 연출은 실제 대난투를 따른다. 보스가 무기를 들면(at) 바닥에 예고 장판이
- * 깔리며 플레이어 쪽으로 밀려오고, 그것이 발밑에 닿는 순간이 impact다.
+ * 연출은 실제 대난투를 따른다. 보스가 반짝이고(at) 1초 뒤에 무기를 들면
+ * 바닥에 예고 장판이 깔리며 플레이어 쪽으로 밀려오고, 그것이 발밑에 닿는
+ * 순간이 impact다.
  */
 
 type FieldState = 'telegraphing' | 'resolved';
@@ -58,8 +60,10 @@ interface LiveGuard {
   edgeMat: THREE.MeshBasicMaterial;
   /** 장판이 가득 찼을 때의 크기 */
   span: { width: number; length: number; from: number };
-  /** 이 공격이 보스에게 지시한 모션의 식별자 */
+  /** 이 공격이 보스에게 지시한 모션의 식별자. 모션 시작 전에는 0. */
   motionToken: number;
+  /** 반짝임 뒤 FLASH_LEAD가 지나 실제 모션이 시작됐는가 */
+  motionStarted: boolean;
   fadeLeft: number;
   fadeTotal: number;
 }
@@ -82,15 +86,6 @@ const COLOR_STAND = 0x49e08a;
 const CUE_VISIBLE = 300;
 const SHOCKWAVE_LIFE = 700;
 
-/**
- * 자세를 세운 뒤 이 시간(ms) 안에 맞으면 최고 등급.
- *
- * 자세는 0.5초 유지되므로 아무 때나 미리 눌러도 막히기는 한다. 그러면
- * "일찍 눌러두고 기다리기"가 최적해가 되어 연습이 안 되므로, 공격에
- * 맞춰 늦게 세운 가드에 더 높은 등급을 준다.
- */
-const LEAD_EXCELLENT = 160;
-
 export type Feedback = {
   text: string;
   tone: 'just' | 'good' | 'bad';
@@ -105,7 +100,6 @@ export interface Encounter {
   readonly time: number;
   readonly duration: number;
   readonly finished: boolean;
-  readonly guardBlocked: boolean;
   activeLabels(): { text: string; rule: Rule | 'guard' }[];
   update(dt: number, input: Input): void;
   restart(): void;
@@ -116,10 +110,6 @@ export interface Encounter {
 
 function endOf(event: TimelineEvent): number {
   return isGuard(event) ? event.impact : event.at + event.windup;
-}
-
-function sequenceOf(cast: GuardCast): string {
-  return cast.sequence ?? `solo@${cast.at}`;
 }
 
 /**
@@ -184,8 +174,19 @@ export function createEncounter(
   scene.add(boss.object);
 
   const span = guardSpan(pattern.arena);
-  const duration = pattern.duration ?? Math.max(...pattern.casts.map(endOf)) + 1500;
-  const guardTotal = pattern.casts.filter(isGuard).length;
+
+  /**
+   * 이번 판의 타임라인. 함수로 정의된 패턴은 restart마다 새로 뽑히므로
+   * 대난투처럼 모션 순서가 매번 섞인다.
+   */
+  function rollCasts(): TimelineEvent[] {
+    return typeof pattern.casts === 'function' ? pattern.casts() : pattern.casts;
+  }
+
+  let casts = rollCasts();
+  // 순서만 섞이고 시각은 고정이라 길이는 판마다 같다.
+  const duration = pattern.duration ?? Math.max(...casts.map(endOf)) + 1500;
+  let guardTotal = casts.filter(isGuard).length;
 
   let showCue = options.showCue;
   let fields: LiveField[] = [];
@@ -194,11 +195,8 @@ export function createEncounter(
   let time = 0;
   let hits = 0;
   let justGuards = 0;
-  let excellents = 0;
-  let greats = 0;
   let whiffs = 0;
   let leads: number[] = [];
-  let lockedSequences = new Set<string>();
 
   // ---------- 장판 ----------
 
@@ -296,10 +294,13 @@ export function createEncounter(
 
   // ---------- 저스트가드 ----------
 
+  /**
+   * 반짝임. 여기서는 아직 무기를 들지 않는다 — FLASH_LEAD(1초) 뒤에
+   * updateGuard가 모션을 시작시킨다. 반짝임만 보고 누르면 한참 이르다는 걸
+   * 몸으로 익히게 하는 게 이 간격의 목적이다.
+   */
   function spawnGuard(cast: GuardCast): LiveGuard {
-    // 보스가 무기를 들고 예비동작에 들어간다. 낫은 플레이어를 향해 날아가므로
-    // 지금 서 있는 자리를 목표로 준다.
-    const motionToken = boss.cast(cast.motion, cast.impact - cast.at, player.pos.z);
+    boss.flash();
 
     const group = new THREE.Group();
     const texture = chevronTexture();
@@ -333,6 +334,10 @@ export function createEncounter(
     edge.position.y = 0.09;
     scene.add(edge);
 
+    // 예고 장판은 모션이 시작돼야 깔린다. 반짝임 단계에서는 아무것도 없다.
+    group.visible = false;
+    edge.visible = false;
+
     spawnShockwave();
 
     return {
@@ -345,7 +350,8 @@ export function createEncounter(
       edge,
       edgeMat,
       span,
-      motionToken,
+      motionToken: 0,
+      motionStarted: false,
       fadeLeft: 0,
       fadeTotal: 1,
     };
@@ -378,13 +384,9 @@ export function createEncounter(
     entry.edge.visible = false;
   }
 
-  /**
-   * 헛가드. 실제 대난투 규칙대로 해당 보스 패턴 전체의 저스트가드를 막는다.
-   * 확신이 없으면 안 누르는 판단을 훈련시키는 장치다.
-   */
-  function whiff(target: LiveGuard | undefined, message: string) {
+  /** 아무것도 안 오는데 자세를 세운 것. 자세와 경직만큼 시간을 버린다. */
+  function whiff(message: string) {
     whiffs++;
-    if (target) lockedSequences.add(sequenceOf(target.cast));
     onFeedback({ text: message, tone: 'bad' });
   }
 
@@ -412,36 +414,24 @@ export function createEncounter(
     );
 
     if (!covered) {
-      // 곧 올 공격을 향해 헛친 것이라면 그 패턴을 잠근다.
-      // 완전히 엉뚱한 타이밍이면 잠글 대상이 없으니 경고만 한다.
       const upcoming = nextGuard();
-      whiff(upcoming, upcoming ? '헛가드 — 너무 이름' : '헛가드 — 대상 없음');
+      whiff(upcoming ? '헛가드 — 너무 이름' : '헛가드 — 대상 없음');
     }
   }
 
   /**
    * 공격이 닿는 순간. 저스트가드 판정은 오직 여기서만 일어난다.
-   * 조건은 하나다 — 지금 방어 자세가 서 있는가.
+   * 조건은 하나고 결과는 성공 아니면 실패, 그 둘뿐이다 —
+   * 지금 방어 자세가 서 있는가.
    */
   function resolveGuard(entry: LiveGuard) {
-    const locked = lockedSequences.has(sequenceOf(entry.cast));
-
-    if (player.guarding && !locked) {
-      // 자세를 세운 뒤 몇 ms 만에 맞았는가. 작을수록 공격에 맞춰 눌렀다는 뜻.
-      const lead = Math.round(player.guardElapsed ?? 0);
-      const excellent = lead <= LEAD_EXCELLENT;
-
+    if (player.guarding) {
       justGuards++;
-      leads.push(lead);
-      if (excellent) excellents++;
-      else greats++;
-
+      // 등급은 없지만 "자세를 세운 뒤 몇 ms 만에 맞았는가"는 연습 지표로 남긴다.
+      leads.push(Math.round(player.guardElapsed ?? 0));
       finishGuard(entry, COLOR_STAND);
       player.guardFlash = 260;
-      onFeedback({
-        text: excellent ? 'Excellent' : 'Great',
-        tone: 'just',
-      });
+      onFeedback({ text: '저스트가드', tone: 'just' });
       return;
     }
 
@@ -449,15 +439,13 @@ export function createEncounter(
     hits++;
     player.hp -= entry.cast.damage ?? 1;
     onHit();
-    onFeedback({
-      text: locked && player.guarding ? '가드 불가 — 이미 헛가드' : '피격',
-      tone: 'bad',
-    });
+    onFeedback({ text: '실패', tone: 'bad' });
   }
 
   function updateGuard(entry: LiveGuard, dt: number) {
     if (entry.state === 'telegraphing') {
-      const windup = Math.max(1, entry.cast.impact - entry.cast.at);
+      const motionAt = entry.cast.at + FLASH_LEAD;
+      const windup = Math.max(1, entry.cast.impact - motionAt);
       const toImpact = entry.cast.impact - time;
 
       // 판정은 닿는 순간 딱 한 번. 지나쳤으면 즉시 결론을 낸다.
@@ -466,6 +454,16 @@ export function createEncounter(
         resolveGuard(entry);
         return;
       }
+
+      // 반짝임에서 1초 — 이제 보스가 무기를 든다
+      if (!entry.motionStarted && time >= motionAt) {
+        entry.motionStarted = true;
+        // 낫은 플레이어를 향해 날아가므로 지금 서 있는 자리를 목표로 준다
+        entry.motionToken = boss.cast(entry.cast.motion, windup, player.pos.z);
+        entry.group.visible = true;
+        entry.edge.visible = true;
+      }
+      if (!entry.motionStarted) return;
 
       // 0 → 1로 차오르며 플레이어 쪽으로 밀려온다. 발밑에 닿는 순간이 impact.
       const progress = Math.max(0.001, Math.min(1, 1 - toImpact / windup));
@@ -485,12 +483,10 @@ export function createEncounter(
 
       // 지금 자세가 서 있으면 장판이 파랗게 죽는다 —
       // "이 순간 맞으면 막힌다"를 실시간으로 보여주는 게 학습에 제일 중요하다.
-      const locked = lockedSequences.has(sequenceOf(entry.cast));
-      const tint = locked ? 0x6b7392 : player.guarding ? 0x7fd8ff : 0xffffff;
-      entry.fillMat.color.set(tint);
-      entry.fillMat.opacity = locked ? 0.22 : 0.38;
-      entry.edgeMat.color.set(locked ? 0x6b7392 : player.guarding ? 0x7fd8ff : 0xffb347);
-      entry.edgeMat.opacity = locked ? 0.45 : 0.95;
+      entry.fillMat.color.set(player.guarding ? 0x7fd8ff : 0xffffff);
+      entry.fillMat.opacity = 0.38;
+      entry.edgeMat.color.set(player.guarding ? 0x7fd8ff : 0xffb347);
+      entry.edgeMat.opacity = 0.95;
       return;
     }
 
@@ -506,10 +502,12 @@ export function createEncounter(
 
     for (const g of guards) {
       const c = g.cast;
-      if (time >= c.at && time <= c.impact) {
-        // 닿을 때가 가까울수록 밝아진다 — 예비동작의 진행도가 곧 밝기다
-        const windup = Math.max(1, c.impact - c.at);
-        glow = Math.max(glow, Math.min(1, 0.35 + 0.65 * (1 - (c.impact - time) / windup)));
+      const motionAt = c.at + FLASH_LEAD;
+      if (time >= motionAt && time <= c.impact) {
+        // 예비동작 동안 은은하게만 밝아진다. 세게 물들이면 실루엣이 뭉개져
+        // 정작 봐야 할 무기가 안 보인다 — 신호는 반짝임이 따로 담당한다.
+        const windup = Math.max(1, c.impact - motionAt);
+        glow = Math.max(glow, 0.1 + 0.35 * (1 - (c.impact - time) / windup));
       }
       // 느낌표는 닿기 직전에 뜬다. 이때 눌러야 자세가 공격을 정확히 받는다.
       if (time >= c.impact - CUE_VISIBLE && time <= c.impact) cue = true;
@@ -528,11 +526,6 @@ export function createEncounter(
     get finished() {
       return time >= duration || player.hp <= 0;
     },
-    get guardBlocked() {
-      const next = nextGuard();
-      return next ? lockedSequences.has(sequenceOf(next.cast)) : false;
-    },
-
     setShowCue(show) {
       showCue = show;
     },
@@ -551,7 +544,7 @@ export function createEncounter(
       const prev = time;
       time += dt;
 
-      for (const event of pattern.casts) {
+      for (const event of casts) {
         if (event.at > prev && event.at <= time) {
           if (isGuard(event)) guards.push(spawnGuard(event));
           else fields.push(spawnField(event));
@@ -602,14 +595,15 @@ export function createEncounter(
       fields = [];
       guards = [];
       waves = [];
+      // 판을 새로 시작하니 모션 순서도 다시 뽑는다
+      casts = rollCasts();
+      guardTotal = casts.filter(isGuard).length;
+
       time = 0;
       hits = 0;
       justGuards = 0;
-      excellents = 0;
-      greats = 0;
       whiffs = 0;
       leads = [];
-      lockedSequences = new Set();
       boss.reset();
     },
 
@@ -617,12 +611,10 @@ export function createEncounter(
       return {
         cleared: player.hp > 0 && time >= duration,
         hits,
-        totalCasts: pattern.casts.length,
+        totalCasts: casts.length,
         elapsed: time,
         justGuards,
         guardTotal,
-        excellents,
-        greats,
         whiffs,
         avgLead: leads.length
           ? Math.round(leads.reduce((a, b) => a + b, 0) / leads.length)
